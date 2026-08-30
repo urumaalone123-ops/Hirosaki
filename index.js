@@ -1,4 +1,3 @@
-npm install discord.js
 const {
     Client,
     GatewayIntentBits,
