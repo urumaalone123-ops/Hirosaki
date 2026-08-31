@@ -8,7 +8,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
     ChannelType,
-    Collection
+    Events
 } = require("discord.js");
 
 const fs = require("fs");
