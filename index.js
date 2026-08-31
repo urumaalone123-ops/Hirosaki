@@ -7190,9 +7190,6 @@ client.on(
 // TRACKING VOCAL
 // ============================================================
 
-const voiceSessions =
-    new Map();
-
 client.on(
     "voiceStateUpdate",
     async (
