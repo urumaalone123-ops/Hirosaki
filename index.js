@@ -12,6 +12,10 @@ const {
     Events,
     Collection
 } = require("discord.js");
+const {
+    joinVoiceChannel,
+    getVoiceConnection
+} = require("@discordjs/voice");
 
 const fs = require("fs");
 const path = require("path");
@@ -3651,6 +3655,34 @@ registerCommand("welcome", {
             });
         }
 
+        if (command === "join") {
+    if (!message.member.voice.channel) {
+        return message.reply(
+            "❌ Tu dois être dans un salon vocal."
+        );
+    }
+
+    const channel = message.member.voice.channel;
+
+    try {
+        joinVoiceChannel({
+            channelId: channel.id,
+            guildId: channel.guild.id,
+            adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: false
+        });
+
+        return message.reply(
+            `🎆 Hirosaki a rejoint **${channel.name}**.`
+        );
+    } catch (error) {
+        console.error("❌ Erreur +join :", error);
+
+        return message.reply(
+            "❌ Impossible de rejoindre ce salon vocal."
+        );
+    }
+ }
         return safeReply(message, {
             embeds: [
                 errorEmbed(
