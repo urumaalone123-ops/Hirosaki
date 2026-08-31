@@ -10463,6 +10463,31 @@ function printFinalSpecificationReport() {
 
 printFinalSpecificationReport();
 
+// ============================================================
+// DÉMARRAGE DU BOT
+// ============================================================
+
+client.once(
+    Events.ClientReady,
+    readyClient => {
+        console.log(
+            `🎆 Hirosaki connecté en tant que ${readyClient.user.tag}`
+        );
+
+        performStartupChecks();
+    }
+);
+
+client.login(TOKEN).catch(error => {
+    console.error(
+        "❌ Impossible de connecter Hirosaki à Discord :",
+        error
+    );
+});
+
+// ============================================================
+// FIN PARTIE 10/10
+// ============================================================
 
 // ============================================================
 // FIN PARTIE 10/10
