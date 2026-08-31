@@ -3,6 +3,7 @@ const {
     GatewayIntentBits,
     Partials,
     PermissionsBitField,
+    PermissionFlagsBits,
     EmbedBuilder,
     ActionRowBuilder,
     ButtonBuilder,
