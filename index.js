@@ -5,6 +5,7 @@ const {
     PermissionsBitField,
     ChannelType,
     EmbedBuilder,
+    ComponentType,
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
@@ -7141,7 +7142,109 @@ client.on(
         }
     }
 );
+// ============================================================
+// GESTION DES COMMANDES PREFIX
+// ============================================================
 
+client.on(
+    "messageCreate",
+    async message => {
+        try {
+            if (
+                !message.guild ||
+                message.author.bot
+            ) {
+                return;
+            }
+
+            const parsed =
+                getCommandFromMessage(
+                    message
+                );
+
+            if (!parsed) {
+                return;
+            }
+
+            const command =
+                commands.get(
+                    parsed.commandName
+                );
+
+            if (!command) {
+                return;
+            }
+
+            // Commandes tickets
+            if (
+                command.name === "ticket-add" ||
+                command.name === "ticket-close" ||
+                command.name === "ticket-claim"
+            ) {
+                if (
+                    !hasTicketPermission(
+                        message.member
+                    )
+                ) {
+                    return sendEmbed(
+                        message,
+                        errorEmbed(
+                            "❌ Tu n'as pas la permission d'utiliser cette commande."
+                        )
+                    );
+                }
+            }
+
+            // Permissions normales
+            if (
+                command.permission > 0 &&
+                !hasPermission(
+                    message.member,
+                    command.permission
+                )
+            ) {
+                return sendEmbed(
+                    message,
+                    errorEmbed(
+                        "❌ Tu n'as pas la permission d'utiliser cette commande."
+                    )
+                );
+            }
+
+            // Commandes réservées à Crown
+            if (
+                command.crownOnly &&
+                !isCrown(message.member)
+            ) {
+                return sendEmbed(
+                    message,
+                    errorEmbed(
+                        "❌ Cette commande est réservée au rôle Crown."
+                    )
+                );
+            }
+
+            await command.execute(
+                message,
+                parsed.args
+            );
+        } catch (error) {
+            console.error(
+                "Erreur commande :",
+                error
+            );
+
+            await sendEmbed(
+                message,
+                errorEmbed(
+                    "❌ Une erreur est survenue pendant l'exécution de la commande."
+                )
+            ).catch(
+                () => {}
+            );
+        }
+    }
+);
 // ============================================================
 // TRACKING MESSAGES POUR LE LEADERBOARD
 // ============================================================
