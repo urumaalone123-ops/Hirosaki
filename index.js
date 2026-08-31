@@ -9401,6 +9401,117 @@ try {
 // AUCUN DOUBLON AVEC LES PARTIES 1 À 8.
 // ============================================================
 // ============================================================
+// ============================================================
+// GESTIONNAIRE DES COMMANDES PREFIX +
+// ============================================================
+
+client.on(
+    Events.MessageCreate,
+    async message => {
+        try {
+            if (!message.guild) {
+                return;
+            }
+
+            if (message.author.bot) {
+                return;
+            }
+
+            const prefix =
+                getGuildConfig(message.guild.id).prefix || PREFIX;
+
+            if (!message.content.startsWith(prefix)) {
+                return;
+            }
+
+            const content =
+                message.content.slice(prefix.length).trim();
+
+            if (!content) {
+                return;
+            }
+
+            const args =
+                parseArguments(content);
+
+            const commandName =
+                args.shift()?.toLowerCase();
+
+            if (!commandName) {
+                return;
+            }
+
+            const command =
+                client.commands.get(commandName);
+
+            if (!command) {
+                return;
+            }
+
+            if (command.guildOnly && !message.guild) {
+                return;
+            }
+
+            const hasAccess =
+                await checkCommandAccess(
+                    message,
+                    command
+                );
+
+            if (!hasAccess) {
+                return;
+            }
+
+            if (
+                command.cooldown &&
+                command.cooldown > 0
+            ) {
+                const remaining =
+                    checkCooldown(
+                        message.guild.id,
+                        message.author.id,
+                        command.name,
+                        command.cooldown
+                    );
+
+                if (remaining > 0) {
+                    return safeReply(
+                        message,
+                        {
+                            embeds: [
+                                errorEmbed(
+                                    `Tu dois attendre encore **${formatDuration(remaining)}** avant d'utiliser cette commande.`
+                                )
+                            ]
+                        }
+                    );
+                }
+            }
+
+            await command.execute(
+                message,
+                args
+            );
+
+        } catch (error) {
+            console.error(
+                "❌ Erreur commande préfixe :",
+                error
+            );
+
+            await safeReply(
+                message,
+                {
+                    embeds: [
+                        errorEmbed(
+                            "Une erreur est survenue lors de l'exécution de cette commande."
+                        )
+                    ]
+                }
+            );
+        }
+    }
+);
 // PARTIE 10/10 — AUDIT FINAL HIROSAKI
 // ============================================================
 //
