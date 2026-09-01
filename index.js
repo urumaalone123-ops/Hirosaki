@@ -5307,7 +5307,10 @@ registerCommand(
                 );
             }
 
-            // Impossible de rank un membre qui possède Crown
+            // Charger les rôles du serveur
+            await message.guild.roles.fetch();
+
+            // Crown ne peut pas être rank
             if (isCrown(member)) {
                 return sendEmbed(
                     message,
@@ -5345,18 +5348,18 @@ registerCommand(
                 }
             }
 
-            // Déjà au maximum
-            if (currentLevel >= 5) {
+            // Aucun grade = on commence à Perm 1
+            const newLevel =
+                currentLevel + 1;
+
+            if (newLevel > 5) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ ${member} est déjà **Perm 5 — Co owner**.`
+                        `❌ ${member} est déjà au niveau maximum (**Co owner**).`
                     )
                 );
             }
-
-            const newLevel =
-                currentLevel + 1;
 
             const newRole =
                 getPermissionRole(
@@ -5368,7 +5371,7 @@ registerCommand(
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ Le rôle **Perm ${newLevel}** est introuvable.`
+                        `❌ Le rôle correspondant à la **Perm ${newLevel}** est introuvable.`
                     )
                 );
             }
@@ -5417,7 +5420,7 @@ registerCommand(
                 );
             }
 
-            // Retirer TOUS les anciens rôles Perm
+            // Retirer les anciens rôles Perm
             for (
                 let level = 1;
                 level <= 5;
@@ -5451,12 +5454,13 @@ registerCommand(
             return sendEmbed(
                 message,
                 successEmbed(
-                    `⬆️ ${member} a été rank **Perm ${newLevel} — ${newRole.name}**.`
+                    `⬆️ ${member} est maintenant **${newRole.name}**.`
                 )
             );
         }
     }
 );
+
 
 // ------------------------------------------------------------
 // +DERANK
@@ -5492,7 +5496,10 @@ registerCommand(
                 );
             }
 
-            // Impossible de derank Crown
+            // Charger les rôles du serveur
+            await message.guild.roles.fetch();
+
+            // Crown ne peut pas être derank
             if (isCrown(member)) {
                 return sendEmbed(
                     message,
@@ -5534,17 +5541,16 @@ registerCommand(
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ ${member} n'a aucun rôle **Perm**.`
+                        `❌ ${member} n'a aucun rôle de permission.`
                     )
                 );
             }
 
-            // Déjà au minimum
-            if (currentLevel <= 1) {
+            if (currentLevel === 1) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ ${member} est déjà **Perm 1 — Modérateur test**.`
+                        `❌ ${member} est déjà au grade minimum (**Modérateur test**).`
                     )
                 );
             }
@@ -5562,7 +5568,7 @@ registerCommand(
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ Le rôle **Perm ${newLevel}** est introuvable.`
+                        `❌ Le rôle correspondant à la **Perm ${newLevel}** est introuvable.`
                     )
                 );
             }
@@ -5611,7 +5617,7 @@ registerCommand(
                 );
             }
 
-            // Retirer TOUS les anciens rôles Perm
+            // Retirer les anciens rôles Perm
             for (
                 let level = 1;
                 level <= 5;
@@ -5645,15 +5651,12 @@ registerCommand(
             return sendEmbed(
                 message,
                 successEmbed(
-                    `⬇️ ${member} a été derank **Perm ${newLevel} — ${newRole.name}**.`
+                    `⬇️ ${member} est maintenant **${newRole.name}**.`
                 )
             );
         }
     }
 );
-
-
-
 // ------------------------------------------------------------
 // +JOINVOICE
 // ------------------------------------------------------------
