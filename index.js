@@ -13,6 +13,8 @@ const {
     ActivityType
 } = require("discord.js");
 
+require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 
@@ -547,7 +549,8 @@ const COMMAND_PERMISSIONS = {
     "stat-schedule": 4,
     "leaderboard-schedule": 4,
 
-    embed: 4
+    embed: 4,
+    dm: 4
 };
 
 // ============================================================
@@ -561,6 +564,16 @@ function registerCommand(
     name,
     options = {}
 ) {
+    // Évite qu'une commande déclarée deux fois dans un ancien bloc de
+    // migration remplace silencieusement la première implémentation.
+    if (
+        commands.has(
+            name.toLowerCase()
+        )
+    ) {
+        return;
+    }
+
     const command = {
         name,
         aliases:
@@ -1204,10 +1217,38 @@ function getCommandFromMessage(
             /\s+/
         );
 
-    const commandName =
+    let commandName =
         parts
             .shift()
             .toLowerCase();
+
+    // Les commandes historiques du cahier des charges peuvent être écrites
+    // avec ou sans tiret : "+all sanction", "+clear sanction", "+remove roll".
+    const secondWord =
+        parts[0]
+            ? parts[0].toLowerCase()
+            : "";
+
+    if (
+        commandName === "all" &&
+        secondWord === "sanction"
+    ) {
+        commandName = "all-sanction";
+        parts.shift();
+    } else if (
+        commandName === "clear" &&
+        secondWord === "sanction"
+    ) {
+        commandName = "clear-sanction";
+        parts.shift();
+    } else if (
+        commandName === "remove" &&
+        (secondWord === "role" ||
+            secondWord === "roll")
+    ) {
+        commandName = "remove-role";
+        parts.shift();
+    }
 
     return {
         commandName,
@@ -4364,6 +4405,102 @@ registerCommand(
 );
 
 // ------------------------------------------------------------
+// +DM — CONFIGURATION DES MESSAGES PRIVÉS DE SANCTION
+// ------------------------------------------------------------
+//
+// +dm on|off
+// +dm message <texte>
+//
+// Variables disponibles : {user}, {username}, {server}, {sanction},
+// {reason}, {moderator}, {sanction.id}
+// ------------------------------------------------------------
+
+registerCommand(
+    "dm",
+    {
+        permission: 4,
+
+        aliases: [
+            "sanction-dm",
+            "dmsanction"
+        ],
+
+        execute: async (
+            message,
+            args
+        ) => {
+            const config =
+                ensureGuild(
+                    message.guild.id
+                );
+
+            const action =
+                (
+                    args.shift() ||
+                    ""
+                ).toLowerCase();
+
+            if (
+                action === "on" ||
+                action === "off"
+            ) {
+                config.dmSanctions.enabled =
+                    action === "on";
+
+                saveDatabase();
+
+                return sendEmbed(
+                    message,
+                    successEmbed(
+                        action === "on"
+                            ? "📩 Les messages privés de sanction sont activés."
+                            : "📩 Les messages privés de sanction sont désactivés."
+                    )
+                );
+            }
+
+            if (
+                action === "message" ||
+                action === "msg"
+            ) {
+                const text =
+                    args.join(" ").trim();
+
+                if (!text) {
+                    return sendEmbed(
+                        message,
+                        infoEmbed(
+                            `Message actuel :\n\n${config.dmSanctions.message}`
+                        )
+                    );
+                }
+
+                config.dmSanctions.message =
+                    text;
+
+                saveDatabase();
+
+                return sendEmbed(
+                    message,
+                    successEmbed(
+                        "✅ Le message privé de sanction a été modifié."
+                    )
+                );
+            }
+
+            return sendEmbed(
+                message,
+                infoEmbed(
+                    `État actuel : **${config.dmSanctions.enabled ? "activé" : "désactivé"}**\n\n` +
+                    `\`${PREFIX}dm on\` ou \`${PREFIX}dm off\`\n` +
+                    `\`${PREFIX}dm message <texte>\``
+                )
+            );
+        }
+    }
+);
+
+// ------------------------------------------------------------
 // +EMBED
 // ------------------------------------------------------------
 //
@@ -5298,98 +5435,26 @@ registerCommand(
                     args.shift()
                 );
 
-            if (!member) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `Utilisation : \`${PREFIX}rank @membre\``
-                    )
-                );
-            }
-
-            // Charger les rôles du serveur
-            await message.guild.roles.fetch();
-
-            // Crown ne peut pas être rank
-            if (isCrown(member)) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Impossible de rank un membre possédant le rôle **Crown**."
-                    )
-                );
-            }
-
-            // Trouver le niveau actuel
-            let currentLevel = 0;
-
-            for (
-                let level = 1;
-                level <= 5;
-                level++
-            ) {
-                const role =
-                    getPermissionRole(
-                        message.guild,
-                        level
-                    );
-
-                if (
-                    role &&
-                    member.roles.cache.has(
-                        role.id
-                    )
-                ) {
-                    currentLevel =
-                        Math.max(
-                            currentLevel,
-                            level
-                        );
-                }
-            }
-
-            // Aucun grade = on commence à Perm 1
-            const newLevel =
-                currentLevel + 1;
-
-            if (newLevel > 5) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `❌ ${member} est déjà au niveau maximum (**Co owner**).`
-                    )
-                );
-            }
-
-            const newRole =
-                getPermissionRole(
+            const role =
+                resolveRole(
                     message.guild,
-                    newLevel
+                    args.shift()
                 );
 
-            if (!newRole) {
+            if (
+                !member ||
+                !role
+            ) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ Le rôle correspondant à la **Perm ${newLevel}** est introuvable.`
-                    )
-                );
-            }
-
-            const botMember =
-                message.guild.members.me;
-
-            if (!botMember) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Impossible de récupérer mon rôle."
+                        `Utilisation : \`${PREFIX}rank @membre @role\``
                     )
                 );
             }
 
             if (
-                newRole.managed
+                role.managed
             ) {
                 return sendEmbed(
                     message,
@@ -5400,67 +5465,31 @@ registerCommand(
             }
 
             if (
-                newRole.position >=
-                botMember.roles.highest.position
+                role.position >=
+                message.guild.members.me.roles.highest.position
             ) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        "❌ Je ne peux pas gérer ce rôle car il est au-dessus ou au même niveau que mon rôle."
+                        "❌ Ce rôle est au-dessus de mon rôle."
                     )
                 );
             }
 
-            if (!member.manageable) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Je ne peux pas modifier les rôles de ce membre."
-                    )
-                );
-            }
-
-            // Retirer les anciens rôles Perm
-            for (
-                let level = 1;
-                level <= 5;
-                level++
-            ) {
-                const role =
-                    getPermissionRole(
-                        message.guild,
-                        level
-                    );
-
-                if (
-                    role &&
-                    member.roles.cache.has(
-                        role.id
-                    )
-                ) {
-                    await member.roles.remove(
-                        role,
-                        `Rank par ${message.author.tag}`
-                    );
-                }
-            }
-
-            // Ajouter le nouveau grade
             await member.roles.add(
-                newRole,
+                role,
                 `Rank par ${message.author.tag}`
             );
 
             return sendEmbed(
                 message,
                 successEmbed(
-                    `⬆️ ${member} est maintenant **${newRole.name}**.`
+                    `⬆️ ${member} a reçu le rôle ${role}.`
                 )
             );
         }
     }
 );
-
 
 // ------------------------------------------------------------
 // +DERANK
@@ -5487,106 +5516,26 @@ registerCommand(
                     args.shift()
                 );
 
-            if (!member) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `Utilisation : \`${PREFIX}derank @membre\``
-                    )
-                );
-            }
-
-            // Charger les rôles du serveur
-            await message.guild.roles.fetch();
-
-            // Crown ne peut pas être derank
-            if (isCrown(member)) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Impossible de derank un membre possédant le rôle **Crown**."
-                    )
-                );
-            }
-
-            // Trouver le niveau actuel
-            let currentLevel = 0;
-
-            for (
-                let level = 1;
-                level <= 5;
-                level++
-            ) {
-                const role =
-                    getPermissionRole(
-                        message.guild,
-                        level
-                    );
-
-                if (
-                    role &&
-                    member.roles.cache.has(
-                        role.id
-                    )
-                ) {
-                    currentLevel =
-                        Math.max(
-                            currentLevel,
-                            level
-                        );
-                }
-            }
-
-            if (currentLevel === 0) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `❌ ${member} n'a aucun rôle de permission.`
-                    )
-                );
-            }
-
-            if (currentLevel === 1) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `❌ ${member} est déjà au grade minimum (**Modérateur test**).`
-                    )
-                );
-            }
-
-            const newLevel =
-                currentLevel - 1;
-
-            const newRole =
-                getPermissionRole(
+            const role =
+                resolveRole(
                     message.guild,
-                    newLevel
+                    args.shift()
                 );
 
-            if (!newRole) {
+            if (
+                !member ||
+                !role
+            ) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `❌ Le rôle correspondant à la **Perm ${newLevel}** est introuvable.`
-                    )
-                );
-            }
-
-            const botMember =
-                message.guild.members.me;
-
-            if (!botMember) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Impossible de récupérer mon rôle."
+                        `Utilisation : \`${PREFIX}derank @membre @role\``
                     )
                 );
             }
 
             if (
-                newRole.managed
+                role.managed
             ) {
                 return sendEmbed(
                     message,
@@ -5597,66 +5546,32 @@ registerCommand(
             }
 
             if (
-                newRole.position >=
-                botMember.roles.highest.position
+                role.position >=
+                message.guild.members.me.roles.highest.position
             ) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        "❌ Je ne peux pas gérer ce rôle car il est au-dessus ou au même niveau que mon rôle."
+                        "❌ Ce rôle est au-dessus de mon rôle."
                     )
                 );
             }
 
-            if (!member.manageable) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Je ne peux pas modifier les rôles de ce membre."
-                    )
-                );
-            }
-
-            // Retirer les anciens rôles Perm
-            for (
-                let level = 1;
-                level <= 5;
-                level++
-            ) {
-                const role =
-                    getPermissionRole(
-                        message.guild,
-                        level
-                    );
-
-                if (
-                    role &&
-                    member.roles.cache.has(
-                        role.id
-                    )
-                ) {
-                    await member.roles.remove(
-                        role,
-                        `Derank par ${message.author.tag}`
-                    );
-                }
-            }
-
-            // Ajouter le nouveau grade
-            await member.roles.add(
-                newRole,
+            await member.roles.remove(
+                role,
                 `Derank par ${message.author.tag}`
             );
 
             return sendEmbed(
                 message,
                 successEmbed(
-                    `⬇️ ${member} est maintenant **${newRole.name}**.`
+                    `⬇️ Le rôle ${role} a été retiré de ${member}.`
                 )
             );
         }
     }
 );
+
 // ------------------------------------------------------------
 // +JOINVOICE
 // ------------------------------------------------------------
@@ -6564,9 +6479,7 @@ registerCommand(
     {
         permission: 3,
 
-        aliases: [
-            "purge"
-        ],
+        aliases: [],
 
         execute: async (
             message,
@@ -6892,6 +6805,7 @@ function getHelpPages() {
                 `\`${PREFIX}remove-role\`\n` +
                 `\`${PREFIX}autorole\`\n` +
                 `\`${PREFIX}embed\`\n` +
+                `\`${PREFIX}dm\`\n` +
                 `\`${PREFIX}welcome\`\n` +
                 `\`${PREFIX}ticket\`\n` +
                 `\`${PREFIX}giveaway\`\n\n` +
@@ -7727,7 +7641,7 @@ process.on(
 // ============================================================
 
 client.once(
-    "ready",
+    "clientReady",
     () => {
         console.log(
             "========================================"
