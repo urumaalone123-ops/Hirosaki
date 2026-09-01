@@ -360,10 +360,35 @@ function findRoleByName(
         return null;
     }
 
+    const normalizedName =
+        String(name)
+            .normalize("NFD")
+            .replace(
+                /[\u0300-\u036f]/g,
+                ""
+            )
+            .toLowerCase()
+            .replace(
+                /[^a-z0-9]+/g,
+                " "
+            )
+            .trim();
+
     return guild.roles.cache.find(
         role =>
-            role.name.toLowerCase() ===
-            name.toLowerCase()
+            String(role.name)
+                .normalize("NFD")
+                .replace(
+                    /[\u0300-\u036f]/g,
+                    ""
+                )
+                .toLowerCase()
+                .replace(
+                    /[^a-z0-9]+/g,
+                    " "
+                )
+                .trim() ===
+            normalizedName
     ) || null;
 }
 
@@ -392,10 +417,26 @@ function getPermissionRole(
         return null;
     }
 
-    return findRoleByName(
-        guild,
-        roleName
-    );
+    const candidates = [
+        roleName,
+        `Perm ${level}`,
+        `Perm${level}`,
+        `Perm ${level} - ${roleName}`
+    ];
+
+    for (const candidate of candidates) {
+        const role =
+            findRoleByName(
+                guild,
+                candidate
+            );
+
+        if (role) {
+            return role;
+        }
+    }
+
+    return null;
 }
 
 // ============================================================
@@ -473,9 +514,9 @@ function getPermissionLevel(
         )
     ) {
         const role =
-            findRoleByName(
+            getPermissionRole(
                 member.guild,
-                roleName
+                level
             );
 
         if (
