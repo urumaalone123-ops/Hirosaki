@@ -1507,9 +1507,14 @@ registerCommand(
         permission: 1,
 
         execute: async message => {
-            const data =
+            const guildSnipes =
                 db.snipes[
                     message.guild.id
+                ];
+
+            const data =
+                guildSnipes?.[
+                    message.channel.id
                 ];
 
             if (!data) {
@@ -1521,52 +1526,47 @@ registerCommand(
                 );
             }
 
-            const channel =
-                message.guild.channels.cache.get(
-                    data.channelId
-                );
+            let deletedContent =
+                typeof data.content ===
+                    "string"
+                    ? data.content.trim()
+                    : "";
+
+            if (
+                !deletedContent &&
+                data.attachments?.length
+            ) {
+                deletedContent =
+                    data.attachments
+                        .map(
+                            (url, index) =>
+                                `[Pièce jointe ${index + 1}](${url})`
+                        )
+                        .join("\n");
+            }
+
+            if (!deletedContent) {
+                deletedContent =
+                    "*Message supprimé sans contenu texte.*";
+            }
+
+            if (
+                deletedContent.length >
+                3900
+            ) {
+                deletedContent =
+                    `${deletedContent.slice(0, 3897)}...`;
+            }
 
             const snipeEmbed =
                 createEmbed({
                     title:
-                        "🕵️ Dernier message supprimé",
+                        "🗑️ Message supprimé",
                     description:
-                        data.content ||
-                        "*Aucun contenu texte*",
+                        deletedContent,
                     color:
-                        COLORS.warning,
-                    thumbnail:
-                        message.guild.iconURL({
-                            extension:
-                                "png",
-                            size:
-                                256
-                        }),
-                    footer:
-                        `Auteur : ${data.authorTag}`
+                        COLORS.warning
                 });
-
-            snipeEmbed.addFields({
-                name:
-                    "📍 Salon",
-                value:
-                    channel
-                        ? `${channel}`
-                        : "Salon supprimé",
-                inline:
-                    true
-            });
-
-            snipeEmbed.addFields({
-                name:
-                    "🕒 Date",
-                value:
-                    `<t:${Math.floor(
-                        data.deletedAt / 1000
-                    )}:R>`,
-                inline:
-                    true
-            });
 
             return sendEmbed(
                 message,
