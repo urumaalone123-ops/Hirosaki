@@ -36,7 +36,7 @@ dans `data/hirosaki.json`, qui n'est pas versionné par Git.
 - **Perm 3 — Staff confirmé** : `+kick`, `+mute`, `+unmute`, `+clear`, `+purge`
 - **Perm 4 — Responsable staff** : rôles, autorole, bienvenue, embeds, tickets, giveaways, planification et DM de sanctions
 - **Perm 5 — Co owner** : `+ban`, `+unban`, `+unbanall`, `+banlist`
-- **Crown uniquement** : `+rank`, `+derank`
+- **Crown uniquement** : `+rank @membre`, `+derank @membre @role`
 
 Les rôles de permission sont cumulatifs : un rôle de niveau supérieur hérite
 des commandes des niveaux inférieurs.
@@ -48,6 +48,7 @@ des commandes des niveaux inférieurs.
 +stat
 +leaderboard
 +snipe
++rank @membre
 +addrole @membre @role
 +remove-role @membre @role
 +autorole @role
