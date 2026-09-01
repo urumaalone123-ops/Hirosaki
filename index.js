@@ -5435,56 +5435,102 @@ registerCommand(
                     args.shift()
                 );
 
-            const role =
-                resolveRole(
-                    message.guild,
-                    args.shift()
-                );
+            const botHighestRole =
+                message.guild.members.me?.roles.highest;
 
-            if (
-                !member ||
-                !role
-            ) {
+            if (!member) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        `Utilisation : \`${PREFIX}rank @membre @role\``
+                        `Utilisation : \`${PREFIX}rank @membre\``
                     )
                 );
             }
 
-            if (
-                role.managed
-            ) {
+            if (!botHighestRole) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        "❌ Ce rôle est géré par une intégration."
+                        "❌ Je ne peux pas déterminer mon rôle le plus élevé."
                     )
                 );
             }
 
+            const currentRole =
+                member.roles.cache
+                    .filter(
+                        role =>
+                            role.id !==
+                                message.guild.id &&
+                            !role.managed
+                    )
+                    .sort(
+                        (a, b) =>
+                            b.position -
+                            a.position
+                    )
+                    .first();
+
             if (
-                role.position >=
-                message.guild.members.me.roles.highest.position
+                currentRole &&
+                currentRole.position >=
+                    botHighestRole.position
             ) {
                 return sendEmbed(
                     message,
                     errorEmbed(
-                        "❌ Ce rôle est au-dessus de mon rôle."
+                        "❌ Je ne peux pas modifier ce membre car son rôle est au-dessus ou au même niveau que le mien."
                     )
+                );
+            }
+
+            const nextRole =
+                message.guild.roles.cache
+                    .filter(
+                        role =>
+                            role.id !==
+                                message.guild.id &&
+                            !role.managed &&
+                            role.position <
+                                botHighestRole.position &&
+                            role.position >
+                                (currentRole?.position ??
+                                    0)
+                    )
+                    .sort(
+                        (a, b) =>
+                            a.position -
+                            b.position
+                    )
+                    .first();
+
+            if (!nextRole) {
+                return sendEmbed(
+                    message,
+                    errorEmbed(
+                        currentRole
+                            ? `❌ ${member} possède déjà le rôle le plus élevé que je peux attribuer.`
+                            : `❌ Aucun rôle attribuable n'est disponible pour ${member}.`
+                    )
+                );
+            }
+
+            if (currentRole) {
+                await member.roles.remove(
+                    currentRole,
+                    `Ancien rôle retiré lors du rank par ${message.author.tag}`
                 );
             }
 
             await member.roles.add(
-                role,
-                `Rank par ${message.author.tag}`
+                nextRole,
+                `Rank automatique par ${message.author.tag}`
             );
 
             return sendEmbed(
                 message,
                 successEmbed(
-                    `⬆️ ${member} a reçu le rôle ${role}.`
+                    `⬆️ ${member} passe au rôle ${nextRole}.`
                 )
             );
         }
