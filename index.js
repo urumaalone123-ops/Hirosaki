@@ -89,7 +89,10 @@ const DEFAULT_DATABASE = {
     duos: {},
     giveaways: {},
     snipes: {},
-    schedules: {}
+    schedules: {},
+    statsReset: {
+        lastResetKey: null
+    }
 };
 
 function createDatabase() {
@@ -1236,9 +1239,17 @@ const recentMessageSnapshots =
 function rememberMessage(
     message
 ) {
+    const guildId =
+        message.guildId ||
+        message.guild?.id;
+
+    const channelId =
+        message.channelId ||
+        message.channel?.id;
+
     if (
-        !message.guildId ||
-        !message.channelId ||
+        !guildId ||
+        !channelId ||
         !message.id ||
         message.author?.bot
     ) {
@@ -1248,10 +1259,8 @@ function rememberMessage(
     recentMessageSnapshots.set(
         message.id,
         {
-            guildId:
-                message.guildId,
-            channelId:
-                message.channelId,
+            guildId,
+            channelId,
             content:
                 typeof message.content ===
                     "string"
@@ -3190,6 +3199,164 @@ function getDuoLeaderboard(
 }
 
 // ------------------------------------------------------------
+// RESET HEBDOMADAIRE DES STATISTIQUES
+// ------------------------------------------------------------
+
+const STATS_TIME_ZONE =
+    "Europe/Paris";
+
+function getStatsWeekKey(
+    date = new Date()
+) {
+    const parts =
+        new Intl.DateTimeFormat(
+            "en-US",
+            {
+                timeZone:
+                    STATS_TIME_ZONE,
+                weekday:
+                    "short",
+                year:
+                    "numeric",
+                month:
+                    "2-digit",
+                day:
+                    "2-digit"
+            }
+        ).formatToParts(
+            date
+        );
+
+    const values =
+        Object.fromEntries(
+            parts.map(
+                part => [
+                    part.type,
+                    part.value
+                ]
+            )
+        );
+
+    const localDate =
+        Date.UTC(
+            Number(values.year),
+            Number(values.month) - 1,
+            Number(values.day)
+        );
+
+    const sundayDate =
+        new Date(
+            localDate -
+                new Date(
+                    localDate
+                ).getUTCDay() *
+                    24 *
+                    60 *
+                    60 *
+                    1000
+        );
+
+    return [
+        sundayDate.getUTCFullYear(),
+        String(
+            sundayDate.getUTCMonth() + 1
+        ).padStart(
+            2,
+            "0"
+        ),
+        String(
+            sundayDate.getUTCDate()
+        ).padStart(
+            2,
+            "0"
+        )
+    ].join("-");
+}
+
+function resetWeeklyStatisticsIfNeeded() {
+    if (
+        !db.statsReset ||
+        typeof db.statsReset !==
+            "object"
+    ) {
+        db.statsReset = {};
+    }
+
+    const weekKey =
+        getStatsWeekKey();
+
+    // Initialise le repère sans effacer
+    // les anciennes statistiques déjà présentes.
+    if (
+        typeof db.statsReset.lastResetKey !==
+        "string"
+    ) {
+        db.statsReset.lastResetKey =
+            weekKey;
+        saveDatabase();
+        return false;
+    }
+
+    if (
+        db.statsReset.lastResetKey ===
+        weekKey
+    ) {
+        return false;
+    }
+
+    db.messages = {};
+    db.voice = {};
+    db.duos = {};
+
+    for (
+        const guildId of new Set([
+            ...Object.keys(
+                db.guilds
+            ),
+            ...client.guilds.cache.keys()
+        ])
+    ) {
+        ensureGuild(
+            guildId
+        );
+    }
+
+    const now =
+        Date.now();
+
+    // Les sessions ouvertes repartent de zéro
+    // au début de la nouvelle semaine.
+    for (
+        const key of voiceSessions.keys()
+    ) {
+        voiceSessions.set(
+            key,
+            now
+        );
+    }
+
+    for (
+        const key of duoVoiceSessions.keys()
+    ) {
+        duoVoiceSessions.set(
+            key,
+            now
+        );
+    }
+
+    db.statsReset.lastResetKey =
+        weekKey;
+
+    saveDatabase();
+
+    console.log(
+        `📊 Statistiques réinitialisées pour la semaine du dimanche ${weekKey}.`
+    );
+
+    return true;
+}
+
+// ------------------------------------------------------------
 // FORMATAGE LEADERBOARD MEMBRE
 // ------------------------------------------------------------
 
@@ -4114,6 +4281,8 @@ let lastScheduleMinute =
 
 setInterval(
     async () => {
+        resetWeeklyStatisticsIfNeeded();
+
         const now =
             new Date();
 
@@ -7550,14 +7719,20 @@ async function rememberDeletedMessage(
             return;
         }
 
-        // Une suppression peut fournir un message partiel.
-        // Le fetch est tenté, puis le snapshot local sert de
-        // secours si Discord ne permet plus de relire le message.
         let deletedMessage =
             message;
 
+        const snapshot =
+            recentMessageSnapshots.get(
+                message.id
+            );
+
+        // Le snapshot est prioritaire : il est disponible
+        // immédiatement, sans attendre un fetch Discord.
+        // Cela évite que +snipe passe avant la sauvegarde.
         if (
-            message.partial
+            message.partial &&
+            !snapshot
         ) {
             deletedMessage =
                 await message.fetch()
@@ -7565,11 +7740,6 @@ async function rememberDeletedMessage(
                         () => message
                     );
         }
-
-        const snapshot =
-            recentMessageSnapshots.get(
-                message.id
-            );
 
         const guildId =
             deletedMessage.guildId ||
