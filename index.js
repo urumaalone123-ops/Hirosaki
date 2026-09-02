@@ -5,6 +5,9 @@ const {
     PermissionsBitField,
     ChannelType,
     EmbedBuilder,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
     ComponentType,
     ActionRowBuilder,
     ButtonBuilder,
@@ -204,20 +207,32 @@ function createGuildConfig() {
 
         dmSanctions: {
             enabled: false,
+            title: "⚠️ Sanction Hirosaki",
             message:
                 "Bonjour {user},\n\n" +
                 "Tu viens de recevoir une sanction sur **{server}**.\n\n" +
                 "Sanction : **{sanction}**\n" +
                 "Raison : **{reason}**\n" +
-                "Modérateur : **{moderator}**"
+                "Modérateur : **{moderator}**",
+            color: "#ED4245",
+            footer: "{server}",
+            thumbnail: "server",
+            image: null,
+            timestamp: true
         },
 
         welcome: {
             enabled: false,
             channelId: null,
+            title: "👋 Bienvenue !",
             message:
                 "Bienvenue {user} sur **{server}** !\n" +
-                "Tu es notre membre numéro **{member.count}**."
+                "Tu es notre membre numéro **{member.count}**.",
+            color: "#5865F2",
+            footer: "{server}",
+            thumbnail: "member",
+            image: null,
+            timestamp: true
         },
 
         autorole: {
@@ -663,83 +678,105 @@ const COLORS = {
     neutral: 0x2B2D31
 };
 
-function createEmbed({
-    title,
-    description,
-    color = COLORS.primary,
-    thumbnail = null,
-    footer = null
-}) {
-    const messageEmbed =
-        new EmbedBuilder()
-            .setColor(color);
-
-    if (title) {
-        messageEmbed.setTitle(
-            title
-        );
+function isValidEmbedUrl(value) {
+    if (!value) return false;
+    try {
+        const url = new URL(String(value));
+        return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+        return false;
     }
+}
 
-    if (description) {
-        messageEmbed.setDescription(
-            description
-        );
+function parseEmbedColor(value, fallback = COLORS.primary) {
+    if (value === null || value === undefined || String(value).trim() === "") return fallback;
+    const normalized = String(value).trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(COLORS, normalized)) return COLORS[normalized];
+    const hex = normalized.replace(/^#/, "");
+    return /^[0-9a-f]{6}$/.test(hex) ? parseInt(hex, 16) : null;
+}
+
+function formatEmbedColor(value, fallback = "#5865F2") {
+    const color = parseEmbedColor(value, parseEmbedColor(fallback));
+    return color === null ? fallback : "#" + color.toString(16).padStart(6, "0").toUpperCase();
+}
+
+function parsePipeOptions(parts) {
+    const options = {};
+    for (const part of parts || []) {
+        const separator = String(part).indexOf("=");
+        if (separator < 1) continue;
+        const key = String(part).slice(0, separator).trim().toLowerCase();
+        const value = String(part).slice(separator + 1).trim();
+        if (key && value) options[key] = value;
     }
+    return options;
+}
 
-    if (thumbnail) {
-        messageEmbed.setThumbnail(
-            thumbnail
-        );
+function resolveEmbedImage(value, guild, member = null, fallback = null) {
+    const mode = String(value || "").trim().toLowerCase();
+    if (mode === "none" || mode === "off") return null;
+    if (mode === "server") return guild?.iconURL({ extension: "png", size: 512 }) || fallback;
+    if (mode === "member" || mode === "user") return member?.user?.displayAvatarURL({ extension: "png", size: 512 }) || fallback;
+    return isValidEmbedUrl(value) ? value : fallback;
+}
+
+function replaceTemplateVariables(text, values) {
+    return Object.entries(values || {}).reduce((result, [key, value]) => {
+        const pattern = new RegExp("\\{" + key.replace(".", "\\.") + "\\}", "gi");
+        return result.replace(pattern, String(value ?? ""));
+    }, String(text ?? ""));
+}
+
+function createEmbed({ title, description, color = COLORS.primary, thumbnail = null, footer = null, footerIcon = null, image = null, author = null, authorIcon = null, url = null, fields = [], timestamp = true }) {
+    const messageEmbed = new EmbedBuilder();
+    const parsedColor = parseEmbedColor(color, COLORS.primary);
+    messageEmbed.setColor(parsedColor === null ? COLORS.primary : parsedColor);
+    if (title) messageEmbed.setTitle(String(title).slice(0, 256));
+    if (description) messageEmbed.setDescription(String(description).slice(0, 4096));
+    if (url && isValidEmbedUrl(url)) messageEmbed.setURL(url);
+    if (author) {
+        const authorData = { name: String(author).slice(0, 256) };
+        if (authorIcon && isValidEmbedUrl(authorIcon)) authorData.iconURL = authorIcon;
+        messageEmbed.setAuthor(authorData);
     }
-
+    if (thumbnail && isValidEmbedUrl(thumbnail)) messageEmbed.setThumbnail(thumbnail);
+    if (image && isValidEmbedUrl(image)) messageEmbed.setImage(image);
     if (footer) {
-        messageEmbed.setFooter({
-            text: footer
-        });
+        const footerData = { text: String(footer).slice(0, 2048) };
+        if (footerIcon && isValidEmbedUrl(footerIcon)) footerData.iconURL = footerIcon;
+        messageEmbed.setFooter(footerData);
     }
-
-    messageEmbed.setTimestamp();
-
+    const validFields = Array.isArray(fields) ? fields.filter(field => field?.name && field?.value).slice(0, 25).map(field => ({ name: String(field.name).slice(0, 256), value: String(field.value).slice(0, 1024), inline: Boolean(field.inline) })) : [];
+    if (validFields.length) messageEmbed.addFields(validFields);
+    if (timestamp) messageEmbed.setTimestamp();
     return messageEmbed;
 }
 
-function successEmbed(
-    text
-) {
-    return createEmbed({
-        title:
-            "✅ Hirosaki",
-        description:
-            text,
-        color:
-            COLORS.success
-    });
+function successEmbed(text) { return createEmbed({ title: "✅ Hirosaki", description: text, color: COLORS.success }); }
+function errorEmbed(text) { return createEmbed({ title: "❌ Hirosaki", description: text, color: COLORS.danger }); }
+function infoEmbed(text) { return createEmbed({ title: "ℹ️ Hirosaki", description: text, color: COLORS.primary }); }
+
+function createConfigInput(id, label, style, value, required = false) {
+    const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required);
+    if (value !== null && value !== undefined && String(value) !== "") input.setValue(String(value).slice(0, 4000));
+    return new ActionRowBuilder().addComponents(input);
 }
 
-function errorEmbed(
-    text
-) {
-    return createEmbed({
-        title:
-            "❌ Hirosaki",
-        description:
-            text,
-        color:
-            COLORS.danger
-    });
-}
-
-function infoEmbed(
-    text
-) {
-    return createEmbed({
-        title:
-            "ℹ️ Hirosaki",
-        description:
-            text,
-        color:
-            COLORS.primary
-    });
+async function showTemplateConfigModal(message, type, config) {
+    const settings = type === "dm" ? config.dmSanctions : config.welcome;
+    const isDM = type === "dm";
+    const modal = new ModalBuilder()
+        .setCustomId("hirosaki_" + type + "_config:" + message.author.id)
+        .setTitle(isDM ? "Configurer les DM de sanction" : "Configurer la bienvenue")
+        .addComponents(
+            createConfigInput("title", "Titre de l'embed", TextInputStyle.Short, settings.title || (isDM ? "⚠️ Sanction Hirosaki" : "👋 Bienvenue !"), true),
+            createConfigInput("message", "Description / message", TextInputStyle.Paragraph, settings.message || "", true),
+            createConfigInput("color", "Couleur (#5865F2 ou nom)", TextInputStyle.Short, formatEmbedColor(settings.color, isDM ? "#ED4245" : "#5865F2")),
+            createConfigInput("footer", "Footer (variables acceptées)", TextInputStyle.Short, settings.footer || "{server}"),
+            createConfigInput("image", "Image URL (facultatif)", TextInputStyle.Short, settings.image || "")
+        );
+    await message.showModal(modal);
 }
 
 // ============================================================
@@ -1673,81 +1710,27 @@ function getAllGuildSanctions(
 // DM SANCTION
 // ------------------------------------------------------------
 
-async function sendSanctionDM(
-    guild,
-    member,
-    sanction
-) {
-    const config =
-        ensureGuild(
-            guild.id
-        );
-
-    if (
-        !config.dmSanctions.enabled
-    ) {
-        return;
-    }
-
-    const message =
-        config.dmSanctions.message
-            .replace(
-                /\{user\}/gi,
-                `${member}`
-            )
-            .replace(
-                /\{username\}/gi,
-                member.user.username
-            )
-            .replace(
-                /\{server\}/gi,
-                guild.name
-            )
-            .replace(
-                /\{sanction\}/gi,
-                sanction.type
-            )
-            .replace(
-                /\{reason\}/gi,
-                sanction.reason
-            )
-            .replace(
-                /\{moderator\}/gi,
-                sanction.moderatorTag
-            )
-            .replace(
-                /\{sanction\.id\}/gi,
-                sanction.id
-            );
-
-    const dmEmbed =
-        createEmbed({
-            title:
-                "⚠️ Sanction Hirosaki",
-            description:
-                message,
-            color:
-                COLORS.danger,
-            thumbnail:
-                guild.iconURL({
-                    extension:
-                        "png",
-                    size:
-                        256
-                }),
-            footer:
-                guild.name
-        });
-
-    await member.send({
-        embeds: [
-            dmEmbed
-        ]
-    }).catch(() => {});
+function replaceSanctionVariables(text, guild, member, sanction) {
+    return replaceTemplateVariables(text, { user: member, username: member.user.username, server: guild.name, sanction: sanction.type, reason: sanction.reason, moderator: sanction.moderatorTag, "sanction.id": sanction.id });
 }
 
-// ------------------------------------------------------------
-// COMMANDE +SNIPE
+function buildSanctionDMEmbed(guild, member, sanction) {
+    const config = ensureGuild(guild.id).dmSanctions;
+    return createEmbed({ title: replaceSanctionVariables(config.title || "⚠️ Sanction Hirosaki", guild, member, sanction), description: replaceSanctionVariables(config.message, guild, member, sanction), color: parseEmbedColor(config.color, COLORS.danger), thumbnail: resolveEmbedImage(config.thumbnail || "server", guild, member, guild.iconURL({ extension: "png", size: 256 })), image: resolveEmbedImage(config.image, guild, member, null), footer: replaceSanctionVariables(config.footer || "{server}", guild, member, sanction), timestamp: config.timestamp !== false });
+}
+
+async function sendSanctionDM(guild, member, sanction, { force = false } = {}) {
+    const config = ensureGuild(guild.id);
+    if (!config.dmSanctions.enabled && !force) return false;
+    try {
+        await member.send({ embeds: [buildSanctionDMEmbed(guild, member, sanction)] });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// COMMANDE +SNIPE// COMMANDE +SNIPE
 // ------------------------------------------------------------
 
 registerCommand(
@@ -4859,89 +4842,67 @@ registerCommand(
     "welcome",
     {
         permission: 4,
+        aliases: ["bienvenue"],
+        execute: async (message, args) => {
+            const config = ensureGuild(message.guild.id);
+            const action = (args.shift() || "").toLowerCase();
 
-        aliases: [
-            "bienvenue"
-        ],
+            if (["form", "config", "configure"].includes(action)) return showTemplateConfigModal(message, "welcome", config);
 
-        execute: async (
-            message,
-            args
-        ) => {
-            const config =
-                ensureGuild(
-                    message.guild.id
-                );
-
-            const action =
-                (
-                    args.shift() ||
-                    ""
-                ).toLowerCase();
-
-            if (
-                action ===
-                "off"
-            ) {
-                config.welcome.enabled =
-                    false;
-
+            if (action === "off") {
+                config.welcome.enabled = false;
                 saveDatabase();
-
-                return sendEmbed(
-                    message,
-                    successEmbed(
-                        "👋 Le système de bienvenue est désactivé."
-                    )
-                );
+                return sendEmbed(message, successEmbed("👋 Le système de bienvenue est désactivé."));
             }
 
-            const channel =
-                resolveChannel(
-                    message.guild,
-                    action
-                );
-
-            if (!channel) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `Utilisation : \`${PREFIX}welcome #salon\`\n\n` +
-                        `Pour désactiver : \`${PREFIX}welcome off\``
-                    )
-                );
+            if (action === "test") {
+                if (!config.welcome.channelId) return sendEmbed(message, errorEmbed("❌ Configure d'abord un salon avec " + PREFIX + "welcome #salon."));
+                const channel = message.guild.channels.cache.get(config.welcome.channelId);
+                if (!channel?.isTextBased()) return sendEmbed(message, errorEmbed("❌ Le salon de bienvenue configuré est introuvable ou invalide."));
+                await channel.send({ content: "🧪 Aperçu du message de bienvenue", embeds: [buildWelcomeEmbed(message.member, config.welcome)] });
+                return sendEmbed(message, successEmbed("👋 Aperçu envoyé dans " + channel + "."));
             }
 
-            if (
-                !channel.isTextBased()
-            ) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Le salon doit être textuel."
-                    )
-                );
+            if (!action || action === "status") {
+                const channel = config.welcome.channelId ? message.guild.channels.cache.get(config.welcome.channelId) : null;
+                return sendEmbed(message, infoEmbed(
+                    "👋 Configuration bienvenue\n\n" +
+                    "État : " + (config.welcome.enabled ? "activé" : "désactivé") + "\n" +
+                    "Salon : " + (channel ? String(channel) : "non configuré") + "\n" +
+                    "Titre : " + (config.welcome.title || "👋 Bienvenue !") + "\n\n" +
+                    PREFIX + "welcome #salon • choisir le salon\n" +
+                    PREFIX + "welcome form • ouvrir le formulaire\n" +
+                    PREFIX + "welcome test • prévisualiser\n" +
+                    PREFIX + "welcome off • désactiver"
+                ));
             }
 
-            config.welcome.enabled =
-                true;
+            if (["title", "color", "footer", "image", "thumbnail", "timestamp"].includes(action)) {
+                const value = args.join(" ").trim();
+                if (!value) return sendEmbed(message, infoEmbed("Valeur actuelle : " + (config.welcome[action] ?? "non définie")));
+                if (action === "color" && parseEmbedColor(value, null) === null) return sendEmbed(message, errorEmbed("❌ Couleur invalide."));
+                if (["image", "thumbnail"].includes(action) && !["none", "off", "member", "user", "server"].includes(value.toLowerCase()) && !isValidEmbedUrl(value)) return sendEmbed(message, errorEmbed("❌ URL d'image invalide."));
+                config.welcome[action] = action === "timestamp" ? value.toLowerCase() !== "off" : value;
+                saveDatabase();
+                return sendEmbed(message, successEmbed("✅ Réglage bienvenue mis à jour."));
+            }
 
-            config.welcome.channelId =
-                channel.id;
+            const channel = resolveChannel(message.guild, action);
+            if (!channel?.isTextBased()) return sendEmbed(message, errorEmbed(
+                "Utilisation : " + PREFIX + "welcome #salon\n" +
+                PREFIX + "welcome form • formulaire\n" +
+                PREFIX + "welcome test • aperçu\n" +
+                PREFIX + "welcome off • désactiver"
+            ));
 
+            config.welcome.enabled = true;
+            config.welcome.channelId = channel.id;
             saveDatabase();
-
-            return sendEmbed(
-                message,
-                successEmbed(
-                    `👋 Le salon de bienvenue est maintenant ${channel}.`
-                )
-            );
+            return sendEmbed(message, successEmbed("👋 Le salon de bienvenue est maintenant " + channel + ". Utilise " + PREFIX + "welcome form pour personnaliser le message."));
         }
     }
 );
 
-// ------------------------------------------------------------
 // +WELCOME-MESSAGE
 // ------------------------------------------------------------
 
@@ -4996,214 +4957,116 @@ registerCommand(
 // ------------------------------------------------------------
 // +DM — CONFIGURATION DES MESSAGES PRIVÉS DE SANCTION
 // ------------------------------------------------------------
-//
-// +dm on|off
-// +dm message <texte>
-//
-// Variables disponibles : {user}, {username}, {server}, {sanction},
-// {reason}, {moderator}, {sanction.id}
-// ------------------------------------------------------------
 
 registerCommand(
     "dm",
     {
         permission: 4,
+        aliases: ["sanction-dm", "dmsanction"],
+        execute: async (message, args) => {
+            const config = ensureGuild(message.guild.id);
+            const action = (args.shift() || "").toLowerCase();
 
-        aliases: [
-            "sanction-dm",
-            "dmsanction"
-        ],
+            if (["form", "config", "configure"].includes(action)) return showTemplateConfigModal(message, "dm", config);
 
-        execute: async (
-            message,
-            args
-        ) => {
-            const config =
-                ensureGuild(
-                    message.guild.id
-                );
-
-            const action =
-                (
-                    args.shift() ||
-                    ""
-                ).toLowerCase();
-
-            if (
-                action === "on" ||
-                action === "off"
-            ) {
-                config.dmSanctions.enabled =
-                    action === "on";
-
+            if (action === "on" || action === "off") {
+                config.dmSanctions.enabled = action === "on";
                 saveDatabase();
-
-                return sendEmbed(
-                    message,
-                    successEmbed(
-                        action === "on"
-                            ? "📩 Les messages privés de sanction sont activés."
-                            : "📩 Les messages privés de sanction sont désactivés."
-                    )
-                );
+                return sendEmbed(message, successEmbed(action === "on" ? "📩 Les DM de sanction sont activés." : "📩 Les DM de sanction sont désactivés."));
             }
 
-            if (
-                action === "message" ||
-                action === "msg"
-            ) {
-                const text =
-                    args.join(" ").trim();
-
-                if (!text) {
-                    return sendEmbed(
-                        message,
-                        infoEmbed(
-                            `Message actuel :\n\n${config.dmSanctions.message}`
-                        )
-                    );
-                }
-
-                config.dmSanctions.message =
-                    text;
-
-                saveDatabase();
-
-                return sendEmbed(
-                    message,
-                    successEmbed(
-                        "✅ Le message privé de sanction a été modifié."
-                    )
-                );
+            if (action === "test") {
+                const sent = await sendSanctionDM(message.guild, message.member, { id: "TEST", type: "Warn (test)", reason: "Aperçu de configuration", moderatorTag: message.author.tag }, { force: true });
+                return sendEmbed(message, sent ? successEmbed("📩 Un DM de test a été envoyé à ton compte.") : errorEmbed("❌ Impossible d'envoyer le DM. Vérifie tes paramètres de confidentialité Discord."));
             }
 
-            return sendEmbed(
-                message,
-                infoEmbed(
-                    `État actuel : **${config.dmSanctions.enabled ? "activé" : "désactivé"}**\n\n` +
-                    `\`${PREFIX}dm on\` ou \`${PREFIX}dm off\`\n` +
-                    `\`${PREFIX}dm message <texte>\``
-                )
-            );
+            if (action === "message" || action === "msg") {
+                const text = args.join(" ").trim();
+                if (!text) return sendEmbed(message, infoEmbed("Message actuel :\n\n" + config.dmSanctions.message));
+                config.dmSanctions.message = text;
+                saveDatabase();
+                return sendEmbed(message, successEmbed("✅ Le message DM de sanction a été modifié."));
+            }
+
+            if (["title", "color", "footer", "image", "thumbnail", "timestamp"].includes(action)) {
+                const value = args.join(" ").trim();
+                if (!value) return sendEmbed(message, infoEmbed("Valeur actuelle : " + (config.dmSanctions[action] ?? "non définie")));
+                if (action === "color" && parseEmbedColor(value, null) === null) return sendEmbed(message, errorEmbed("❌ Couleur invalide."));
+                if (["image", "thumbnail"].includes(action) && !["none", "off", "member", "user", "server"].includes(value.toLowerCase()) && !isValidEmbedUrl(value)) return sendEmbed(message, errorEmbed("❌ URL d'image invalide."));
+                config.dmSanctions[action] = action === "timestamp" ? value.toLowerCase() !== "off" : value;
+                saveDatabase();
+                return sendEmbed(message, successEmbed("✅ Réglage des DM de sanction mis à jour."));
+            }
+
+            return sendEmbed(message, infoEmbed(
+                "📩 Configuration des DM de sanction\n\n" +
+                "État : " + (config.dmSanctions.enabled ? "activé" : "désactivé") + "\n" +
+                "Titre : " + (config.dmSanctions.title || "⚠️ Sanction Hirosaki") + "\n\n" +
+                PREFIX + "dm on|off\n" +
+                PREFIX + "dm form • ouvrir le formulaire\n" +
+                PREFIX + "dm test • envoyer un aperçu\n" +
+                PREFIX + "dm message <texte> • message avec variables\n" +
+                "Variables : {user}, {username}, {server}, {sanction}, {reason}, {moderator}, {sanction.id}"
+            ));
         }
     }
 );
 
-// ------------------------------------------------------------
 // +EMBED
 // ------------------------------------------------------------
-//
-// Permet de créer rapidement un embed.
-// Format :
-// +embed #salon | titre | description
+// Format : +embed #salon | titre | description | option=valeur
+// Options : color, footer, thumbnail, image, author, url, timestamp, field
+// Un field utilise le format field=Nom::Valeur.
 // ------------------------------------------------------------
 
 registerCommand(
     "embed",
     {
         permission: 4,
+        aliases: ["createembed", "create-embed"],
+        execute: async (message, args) => {
+            const parts = args.join(" ").split("|").map(part => part.trim());
+            if (parts.length < 3) return sendEmbed(message, errorEmbed(
+                "Utilisation : " + PREFIX + "embed #salon | titre | description | color=#5865F2 | footer=Texte\n" +
+                "Options : thumbnail=server, image=URL, author=Nom, timestamp=off, field=Nom::Valeur"
+            ));
 
-        aliases: [
-            "createembed",
-            "create-embed"
-        ],
+            const channel = resolveChannel(message.guild, parts[0]);
+            if (!channel?.isTextBased()) return sendEmbed(message, errorEmbed("❌ Salon invalide."));
+            const title = parts[1];
+            const description = parts[2];
+            if (!title || !description) return sendEmbed(message, errorEmbed("❌ Le titre et la description sont obligatoires."));
 
-        execute: async (
-            message,
-            args
-        ) => {
-            const raw =
-                args.join(" ");
+            const optionParts = parts.slice(3);
+            const options = parsePipeOptions(optionParts);
+            const color = parseEmbedColor(options.color, COLORS.primary);
+            if (options.color && color === null) return sendEmbed(message, errorEmbed("❌ Couleur invalide."));
 
-            const parts =
-                raw.split("|")
-                    .map(
-                        part =>
-                            part.trim()
-                    );
+            const fields = optionParts.filter(part => part.toLowerCase().startsWith("field=")).map(part => {
+                const value = part.slice(part.indexOf("=") + 1);
+                const separator = value.indexOf("::");
+                return separator > 0 ? { name: value.slice(0, separator).trim(), value: value.slice(separator + 2).trim(), inline: false } : null;
+            }).filter(Boolean);
 
-            if (
-                parts.length <
-                3
-            ) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        `Utilisation : \`${PREFIX}embed #salon | titre | description\``
-                    )
-                );
-            }
-
-            const channel =
-                resolveChannel(
-                    message.guild,
-                    parts[0]
-                );
-
-            if (
-                !channel ||
-                !channel.isTextBased()
-            ) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Salon invalide."
-                    )
-                );
-            }
-
-            const title =
-                parts[1];
-
-            const description =
-                parts
-                    .slice(2)
-                    .join(" | ");
-
-            if (
-                !title ||
-                !description
-            ) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Le titre et la description sont obligatoires."
-                    )
-                );
-            }
-
-            const customEmbed =
-                createEmbed({
-                    title,
-                    description,
-                    color:
-                        COLORS.primary,
-                    thumbnail:
-                        message.guild.iconURL({
-                            extension:
-                                "png",
-                            size:
-                                512
-                        }),
-                    footer:
-                        message.guild.name
-                });
-
-            await channel.send({
-                embeds: [
-                    customEmbed
-                ]
+            const customEmbed = createEmbed({
+                title,
+                description,
+                color,
+                thumbnail: resolveEmbedImage(options.thumbnail, message.guild, message.member, null),
+                image: options.image ? resolveEmbedImage(options.image, message.guild, message.member, null) : null,
+                footer: options.footer || null,
+                author: options.author || null,
+                url: options.url || null,
+                timestamp: options.timestamp?.toLowerCase() !== "off",
+                fields
             });
 
-            return sendEmbed(
-                message,
-                successEmbed(
-                    `✅ Embed envoyé dans ${channel}.`
-                )
-            );
+            await channel.send({ embeds: [customEmbed] });
+            return sendEmbed(message, successEmbed("✅ Embed envoyé dans " + channel + "."));
         }
     }
 );
+
 // ============================================================
 // PARTIE 5/6 — TICKETS, RANK/DERANK, VOCAL & GIVEAWAYS
 // ============================================================
@@ -6386,373 +6249,138 @@ function pickGiveawayWinner(
 // +GIVEAWAY
 // ------------------------------------------------------------
 
+function parseGiveawayEndAt(value) {
+    const duration = parseDuration(value);
+    if (duration) return Date.now() + duration;
+    const timestamp = Date.parse(String(value || ""));
+    return Number.isFinite(timestamp) && timestamp > Date.now() ? timestamp : null;
+}
+
+function replaceGiveawayVariables(text, giveaway, guild, winnerText = "") {
+    return replaceTemplateVariables(text, { prize: giveaway.prize, winners: giveaway.winners, end: "<t:" + Math.floor(giveaway.endAt / 1000) + ":R>", winner: winnerText, server: guild.name, id: giveaway.id });
+}
+
+function buildGiveawayEmbed(guild, giveaway, ended = false, winnerText = "") {
+    const defaultDescription = ended
+        ? "Prix : " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + (winnerText || "Aucun gagnant")
+        : "## " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + giveaway.winners + "\n⏰ Fin : <t:" + Math.floor(giveaway.endAt / 1000) + ":R>\n\nClique sur 🎉 pour participer !";
+    return createEmbed({
+        title: replaceGiveawayVariables(ended ? (giveaway.endTitle || "🎉 Giveaway terminé") : (giveaway.title || "🎉 GIVEAWAY"), giveaway, guild, winnerText),
+        description: replaceGiveawayVariables(ended ? (giveaway.endDescription || defaultDescription) : (giveaway.description || defaultDescription), giveaway, guild, winnerText),
+        color: parseEmbedColor(giveaway.color, COLORS.warning),
+        thumbnail: resolveEmbedImage(giveaway.thumbnail || "server", guild, null, null),
+        image: resolveEmbedImage(giveaway.image, guild, null, null),
+        footer: replaceGiveawayVariables(giveaway.footer || ("ID : " + giveaway.id), giveaway, guild, winnerText),
+        timestamp: giveaway.timestamp !== false
+    });
+}
+
 registerCommand(
     "giveaway",
     {
         permission: 4,
+        aliases: ["giveaways"],
+        execute: async (message, args) => {
+            const action = (args.shift() || "").toLowerCase();
+            const giveaways = ensureGiveaways(message.guild.id);
 
-        aliases: [
-            "giveaways"
-        ],
+            if (action === "start") {
+                const endInput = args.shift();
+                const endAt = parseGiveawayEndAt(endInput);
+                const winners = Number(args.shift());
+                const rawPrize = args.join(" ").trim();
+                const prizeParts = rawPrize.split("|").map(part => part.trim());
+                const prize = prizeParts.shift();
+                const options = parsePipeOptions(prizeParts);
 
-        execute: async (
-            message,
-            args
-        ) => {
-            const action =
-                (
-                    args.shift() ||
-                    ""
-                ).toLowerCase();
+                if (!endAt || !winners || winners < 1 || !prize) return sendEmbed(message, errorEmbed(
+                    "Utilisation : " + PREFIX + "giveaway start 3h 1 Nitro\n" +
+                    "Date précise : " + PREFIX + "giveaway start 2026-09-04T21:00:00+02:00 1 Nitro\n" +
+                    "Options après | : title=..., description=..., color=#..., footer=..., image=URL, thumbnail=server|none, timestamp=off"
+                ));
 
-            const giveaways =
-                ensureGiveaways(
-                    message.guild.id
-                );
-
-            if (
-                action === "start"
-            ) {
-                const duration =
-                    parseDuration(
-                        args.shift()
-                    );
-
-                const winners =
-                    Number(
-                        args.shift()
-                    );
-
-                const prize =
-                    args.join(" ");
-
-                if (
-                    !duration ||
-                    !winners ||
-                    winners < 1 ||
-                    !prize
-                ) {
-                    return sendEmbed(
-                        message,
-                        errorEmbed(
-                            `Utilisation : \`${PREFIX}giveaway start 1h 1 Prix\``
-                        )
-                    );
+                const color = parseEmbedColor(options.color, COLORS.warning);
+                if (options.color && color === null) return sendEmbed(message, errorEmbed("❌ Couleur invalide."));
+                for (const key of ["image", "thumbnail"]) {
+                    if (options[key] && !["none", "off", "server", "member", "user"].includes(options[key].toLowerCase()) && !isValidEmbedUrl(options[key])) return sendEmbed(message, errorEmbed("❌ URL d'image invalide pour l'option " + key + "."));
                 }
 
-                const giveawayId =
-                    generateGiveawayId();
-
+                const giveawayId = generateGiveawayId();
                 const giveaway = {
-                    id:
-                        giveawayId,
-                    guildId:
-                        message.guild.id,
-                    channelId:
-                        message.channel.id,
-                    messageId:
-                        null,
-                    prize,
-                    winners,
-                    duration,
-                    endAt:
-                        Date.now() +
-                        duration,
-                    entries: [],
-                    ended: false
+                    id: giveawayId, guildId: message.guild.id, channelId: message.channel.id, messageId: null, prize, winners,
+                    duration: endAt - Date.now(), endAt, title: options.title || "🎉 GIVEAWAY", endTitle: options["end-title"] || "🎉 Giveaway terminé",
+                    description: options.description || null, endDescription: options["end-description"] || null, color: options.color || "#FEE75C",
+                    footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
+                    timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
                 };
 
-                const endTimestamp =
-                    Math.floor(
-                        giveaway.endAt /
-                            1000
-                    );
-
-                const giveawayEmbed =
-                    createEmbed({
-                        title:
-                            "🎉 GIVEAWAY",
-                        description:
-                            `## ${prize}\n\n` +
-                            `🏆 **Gagnant(s) :** ${winners}\n` +
-                            `⏰ **Fin :** <t:${endTimestamp}:R>\n\n` +
-                            `Clique sur 🎉 pour participer !`,
-                        color:
-                            COLORS.warning,
-                        thumbnail:
-                            message.guild.iconURL({
-                                extension:
-                                    "png",
-                                size:
-                                    512
-                            }),
-                        footer:
-                            `ID : ${giveawayId}`
-                    });
-
-                const row =
-                    new ActionRowBuilder()
-                        .addComponents(
-                            new ButtonBuilder()
-                                .setCustomId(
-                                    `hirosaki_giveaway_join:${giveawayId}`
-                                )
-                                .setLabel(
-                                    "Participer"
-                                )
-                                .setEmoji(
-                                    "🎉"
-                                )
-                                .setStyle(
-                                    ButtonStyle.Success
-                                )
-                        );
-
-                const giveawayMessage =
-                    await message.channel.send({
-                        embeds: [
-                            giveawayEmbed
-                        ],
-                        components: [
-                            row
-                        ]
-                    }).catch(
-                        () => null
-                    );
-
-                if (!giveawayMessage) {
-                    return sendEmbed(
-                        message,
-                        errorEmbed(
-                            "❌ Impossible de créer le giveaway."
-                        )
-                    );
-                }
-
-                giveaway.messageId =
-                    giveawayMessage.id;
-
-                giveaways[giveawayId] =
-                    giveaway;
-
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
+                );
+                const giveawayMessage = await message.channel.send({ embeds: [buildGiveawayEmbed(message.guild, giveaway)], components: [row] }).catch(() => null);
+                if (!giveawayMessage) return sendEmbed(message, errorEmbed("❌ Impossible de créer le giveaway."));
+                giveaway.messageId = giveawayMessage.id;
+                giveaways[giveawayId] = giveaway;
                 saveDatabase();
-
-                return sendEmbed(
-                    message,
-                    successEmbed(
-                        `🎉 Giveaway créé !\n**ID :** \`${giveawayId}\``
-                    )
-                );
+                return sendEmbed(message, successEmbed("🎉 Giveaway créé !\nID : " + giveawayId + "\nFin : <t:" + Math.floor(endAt / 1000) + ":F>"));
             }
 
-            if (
-                action === "reroll" ||
-                action === "rerooll"
-            ) {
-                const giveawayId =
-                    args.shift();
-
-                const giveaway =
-                    giveaways[
-                        giveawayId
-                    ];
-
-                if (!giveaway) {
-                    return sendEmbed(
-                        message,
-                        errorEmbed(
-                            "❌ Giveaway introuvable."
-                        )
-                    );
-                }
-
-                const winner =
-                    pickGiveawayWinner(
-                        giveaway
-                    );
-
-                if (!winner) {
-                    return sendEmbed(
-                        message,
-                        errorEmbed(
-                            "❌ Aucun participant disponible pour effectuer un reroll."
-                        )
-                    );
-                }
-
-                return sendEmbed(
-                    message,
-                    successEmbed(
-                        `🎉 Nouveau gagnant : <@${winner}> !\n\n` +
-                        `**Prix :** ${giveaway.prize}`
-                    )
-                );
+            if (action === "reroll" || action === "rerooll") {
+                const giveawayId = args.shift();
+                const giveaway = giveaways[giveawayId];
+                if (!giveaway) return sendEmbed(message, errorEmbed("❌ Giveaway introuvable."));
+                const winner = pickGiveawayWinner(giveaway);
+                if (!winner) return sendEmbed(message, errorEmbed("❌ Aucun participant disponible pour effectuer un reroll."));
+                return sendEmbed(message, successEmbed("🎉 Nouveau gagnant : <@" + winner + "> !\n\nPrix : " + giveaway.prize));
             }
 
-            if (
-                action === "end"
-            ) {
-                const giveawayId =
-                    args.shift();
-
-                const giveaway =
-                    giveaways[
-                        giveawayId
-                    ];
-
-                if (!giveaway) {
-                    return sendEmbed(
-                        message,
-                        errorEmbed(
-                            "❌ Giveaway introuvable."
-                        )
-                    );
-                }
-
-                if (
-                    giveaway.ended
-                ) {
-                    return sendEmbed(
-                        message,
-                        infoEmbed(
-                            "Ce giveaway est déjà terminé."
-                        )
-                    );
-                }
-
-                await finishGiveaway(
-                    message.guild,
-                    giveawayId
-                );
-
+            if (action === "end") {
+                const giveawayId = args.shift();
+                const giveaway = giveaways[giveawayId];
+                if (!giveaway) return sendEmbed(message, errorEmbed("❌ Giveaway introuvable."));
+                if (giveaway.ended) return sendEmbed(message, infoEmbed("Ce giveaway est déjà terminé."));
+                await finishGiveaway(message.guild, giveawayId);
                 return;
             }
 
-            return sendEmbed(
-                message,
-                infoEmbed(
-                    `Commandes giveaway :\n\n` +
-                    `\`${PREFIX}giveaway start 1h 1 Prix\`\n` +
-                    `\`${PREFIX}giveaway end ID\`\n` +
-                    `\`${PREFIX}giveaway reroll ID\``
-                )
-            );
+            return sendEmbed(message, infoEmbed(
+                "Commandes giveaway :\n\n" +
+                PREFIX + "giveaway start 3h 1 Nitro\n" +
+                PREFIX + "giveaway start 2026-09-04T21:00:00+02:00 1 Nitro\n" +
+                PREFIX + "giveaway end ID\n" +
+                PREFIX + "giveaway reroll ID"
+            ));
         }
     }
 );
 
-// ------------------------------------------------------------
 // FIN D'UN GIVEAWAY
 // ------------------------------------------------------------
 
-async function finishGiveaway(
-    guild,
-    giveawayId
-) {
-    const giveaways =
-        ensureGiveaways(
-            guild.id
-        );
+async function finishGiveaway(guild, giveawayId) {
+    const giveaways = ensureGiveaways(guild.id);
+    const giveaway = giveaways[giveawayId];
+    if (!giveaway || giveaway.ended) return;
 
-    const giveaway =
-        giveaways[
-            giveawayId
-        ];
-
-    if (
-        !giveaway ||
-        giveaway.ended
-    ) {
-        return;
-    }
-
-    giveaway.ended =
-        true;
-
-    const entries =
-        getGiveawayEntries(
-            giveaway
-        );
-
+    giveaway.ended = true;
+    const entries = getGiveawayEntries(giveaway);
     const winners = [];
-
-    const available =
-        [...entries];
-
-    const amount =
-        Math.min(
-            giveaway.winners,
-            available.length
-        );
-
-    for (
-        let i = 0;
-        i < amount;
-        i++
-    ) {
-        const index =
-            Math.floor(
-                Math.random() *
-                    available.length
-            );
-
-        winners.push(
-            available[index]
-        );
-
-        available.splice(
-            index,
-            1
-        );
+    const available = [...entries];
+    const amount = Math.min(giveaway.winners, available.length);
+    for (let i = 0; i < amount; i++) {
+        const index = Math.floor(Math.random() * available.length);
+        winners.push(available[index]);
+        available.splice(index, 1);
     }
 
-    const channel =
-        guild.channels.cache.get(
-            giveaway.channelId
-        );
-
+    const channel = guild.channels.cache.get(giveaway.channelId);
     if (channel?.isTextBased()) {
-        const winnerText =
-            winners.length
-                ? winners
-                      .map(
-                          id =>
-                              `<@${id}>`
-                      )
-                      .join(", ")
-                : "Aucun gagnant";
-
-        const embed =
-            createEmbed({
-                title:
-                    "🎉 Giveaway terminé",
-                description:
-                    `**Prix :** ${giveaway.prize}\n\n` +
-                    `🏆 **Gagnant(s) :** ${winnerText}`,
-                color:
-                    COLORS.success,
-                thumbnail:
-                    guild.iconURL({
-                        extension:
-                            "png",
-                        size:
-                            512
-                    }),
-                footer:
-                    `ID : ${giveaway.id}`
-            });
-
-        await channel.send({
-            embeds: [
-                embed
-            ]
-        }).catch(() => {});
+        const winnerText = winners.length ? winners.map(id => "<@" + id + ">").join(", ") : "Aucun gagnant";
+        await channel.send({ embeds: [buildGiveawayEmbed(guild, giveaway, true, winnerText)] }).catch(() => {});
     }
-
     saveDatabase();
 }
 
-// ------------------------------------------------------------
 // VÉRIFICATION AUTOMATIQUE DES GIVEAWAYS
 // ------------------------------------------------------------
 
@@ -6805,157 +6433,76 @@ setInterval(
 client.on(
     "interactionCreate",
     async interaction => {
-        if (
-            !interaction.isButton()
-        ) {
+        if (interaction.isModalSubmit()) {
+            try {
+                const [modalType, userId] = interaction.customId.split(":");
+                if (!["hirosaki_dm_config", "hirosaki_welcome_config"].includes(modalType) || userId !== interaction.user.id) return;
+
+                const config = ensureGuild(interaction.guild.id);
+                const target = modalType === "hirosaki_dm_config" ? config.dmSanctions : config.welcome;
+                const defaultColor = modalType === "hirosaki_dm_config" ? "#ED4245" : "#5865F2";
+                const title = interaction.fields.getTextInputValue("title").trim();
+                const messageText = interaction.fields.getTextInputValue("message").trim();
+                const colorText = interaction.fields.getTextInputValue("color").trim();
+                const footer = interaction.fields.getTextInputValue("footer").trim();
+                const image = interaction.fields.getTextInputValue("image").trim();
+                if (!title || !messageText) return interaction.reply({ content: "❌ Le titre et le message sont obligatoires.", ephemeral: true });
+                if (colorText && parseEmbedColor(colorText, null) === null) return interaction.reply({ content: "❌ Couleur invalide. Utilise un nom intégré ou un code comme #5865F2.", ephemeral: true });
+                if (image && !isValidEmbedUrl(image)) return interaction.reply({ content: "❌ L'URL de l'image est invalide.", ephemeral: true });
+
+                target.title = title;
+                target.message = messageText;
+                target.color = colorText || defaultColor;
+                target.footer = footer || "{server}";
+                target.image = image || null;
+                saveDatabase();
+                return interaction.reply({ content: "✅ Configuration enregistrée. Utilise +" + (modalType === "hirosaki_dm_config" ? "dm test" : "welcome test") + " pour voir le rendu.", ephemeral: true });
+            } catch (error) {
+                console.error("Erreur formulaire de configuration :", error);
+                if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "❌ Impossible d'enregistrer cette configuration.", ephemeral: true }).catch(() => {});
+            }
             return;
         }
 
+        if (!interaction.isButton()) return;
+
         try {
-            // ------------------------------
-            // CRÉATION TICKET
-            // ------------------------------
-
-            if (
-                interaction.customId ===
-                "hirosaki_ticket_create"
-            ) {
-                await createTicketForMember(
-                    interaction
-                );
-
+            if (interaction.customId === "hirosaki_ticket_create") {
+                await createTicketForMember(interaction);
                 return;
             }
 
-            // ------------------------------
-            // PARTICIPATION GIVEAWAY
-            // ------------------------------
-
-            if (
-                interaction.customId.startsWith(
-                    "hirosaki_giveaway_join:"
-                )
-            ) {
-                const giveawayId =
-                    interaction.customId.split(
-                        ":"
-                    )[1];
-
-                const giveaways =
-                    ensureGiveaways(
-                        interaction.guild.id
-                    );
-
-                const giveaway =
-                    giveaways[
-                        giveawayId
-                    ];
-
-                if (
-                    !giveaway ||
-                    giveaway.ended
-                ) {
-                    return interaction.reply({
-                        embeds: [
-                            errorEmbed(
-                                "❌ Ce giveaway est terminé ou introuvable."
-                            )
-                        ],
-                        ephemeral: true
-                    });
+            if (interaction.customId.startsWith("hirosaki_giveaway_join:")) {
+                const giveawayId = interaction.customId.split(":")[1];
+                const giveaways = ensureGiveaways(interaction.guild.id);
+                const giveaway = giveaways[giveawayId];
+                if (!giveaway || giveaway.ended) return interaction.reply({ embeds: [errorEmbed("❌ Ce giveaway est terminé ou introuvable.")], ephemeral: true });
+                if (giveaway.endAt <= Date.now()) {
+                    await finishGiveaway(interaction.guild, giveawayId);
+                    return interaction.reply({ embeds: [errorEmbed("❌ Ce giveaway vient de se terminer.")], ephemeral: true });
                 }
 
-                if (
-                    giveaway.endAt <=
-                    Date.now()
-                ) {
-                    await finishGiveaway(
-                        interaction.guild,
-                        giveawayId
-                    );
-
-                    return interaction.reply({
-                        embeds: [
-                            errorEmbed(
-                                "❌ Ce giveaway vient de se terminer."
-                            )
-                        ],
-                        ephemeral: true
-                    });
-                }
-
-                const entries =
-                    getGiveawayEntries(
-                        giveaway
-                    );
-
-                const index =
-                    entries.indexOf(
-                        interaction.user.id
-                    );
-
-                if (
-                    index !== -1
-                ) {
-                    entries.splice(
-                        index,
-                        1
-                    );
-
+                const entries = getGiveawayEntries(giveaway);
+                const index = entries.indexOf(interaction.user.id);
+                if (index !== -1) {
+                    entries.splice(index, 1);
+                    giveaway.entries = entries;
                     saveDatabase();
-
-                    return interaction.reply({
-                        embeds: [
-                            infoEmbed(
-                                "↩️ Tu as été retiré du giveaway."
-                            )
-                        ],
-                        ephemeral: true
-                    });
+                    return interaction.reply({ embeds: [infoEmbed("↩️ Tu as été retiré du giveaway.")], ephemeral: true });
                 }
 
-                entries.push(
-                    interaction.user.id
-                );
-
-                giveaway.entries =
-                    entries;
-
+                entries.push(interaction.user.id);
+                giveaway.entries = entries;
                 saveDatabase();
-
-                return interaction.reply({
-                    embeds: [
-                        successEmbed(
-                            "🎉 Tu participes maintenant au giveaway !"
-                        )
-                    ],
-                    ephemeral: true
-                });
+                return interaction.reply({ embeds: [successEmbed("🎉 Tu participes maintenant au giveaway !")], ephemeral: true });
             }
         } catch (error) {
-            console.error(
-                "Erreur interaction partie 5 :",
-                error
-            );
-
-            if (
-                !interaction.replied &&
-                !interaction.deferred
-            ) {
-                await interaction.reply({
-                    embeds: [
-                        errorEmbed(
-                            "❌ Une erreur est survenue."
-                        )
-                    ],
-                    ephemeral: true
-                }).catch(
-                    () => {}
-                );
-            }
+            console.error("Erreur interaction partie 5 :", error);
+            if (!interaction.replied && !interaction.deferred) await interaction.reply({ embeds: [errorEmbed("❌ Une erreur est survenue.")], ephemeral: true }).catch(() => {});
         }
     }
 );
+
 // ============================================================
 // PARTIE 6/6 — STAT, LEADERBOARD, SANCTIONS, CLEAR, HELP,
 //             BIENVENUE, AUTOROLE ET ÉVÉNEMENTS
@@ -7742,60 +7289,15 @@ registerCommand(
 // BIENVENUE
 // ============================================================
 
-function replaceWelcomeVariables(
-    text,
-    member
-) {
-    const guild =
-        member.guild;
+function replaceWelcomeVariables(text, member) {
+    const guild = member.guild;
+    const online = guild.members.cache.filter(m => m.presence && m.presence.status !== "offline").size;
+    return replaceTemplateVariables(text, { user: member, username: member.user.username, "member.count": guild.memberCount, server: guild.name, "server.name": guild.name, "server.id": guild.id, "member.id": member.id, "member.tag": member.user.tag, online });
+}
 
-    const online =
-        guild.members.cache.filter(
-            m =>
-                m.presence &&
-                m.presence.status !==
-                    "offline"
-        ).size;
-
-    return String(text)
-        .replace(
-            /\{user\}/gi,
-            `${member}`
-        )
-        .replace(
-            /\{username\}/gi,
-            member.user.username
-        )
-        .replace(
-            /\{member\.count\}/gi,
-            String(
-                guild.memberCount
-            )
-        )
-        .replace(
-            /\{server\}/gi,
-            guild.name
-        )
-        .replace(
-            /\{server\.name\}/gi,
-            guild.name
-        )
-        .replace(
-            /\{server\.id\}/gi,
-            guild.id
-        )
-        .replace(
-            /\{member\.id\}/gi,
-            member.id
-        )
-        .replace(
-            /\{member\.tag\}/gi,
-            member.user.tag
-        )
-        .replace(
-            /\{online\}/gi,
-            String(online)
-        );
+function buildWelcomeEmbed(member, settings) {
+    const guild = member.guild;
+    return createEmbed({ title: replaceWelcomeVariables(settings.title || "👋 Bienvenue !", member), description: replaceWelcomeVariables(settings.message || "Bienvenue {user} sur **{server}** !", member), color: parseEmbedColor(settings.color, COLORS.primary), thumbnail: resolveEmbedImage(settings.thumbnail || "member", guild, member, member.user.displayAvatarURL({ extension: "png", size: 512 })), image: resolveEmbedImage(settings.image, guild, member, null), footer: replaceWelcomeVariables(settings.footer || "{server}", member), timestamp: settings.timestamp !== false });
 }
 
 // ============================================================
@@ -7840,55 +7342,10 @@ client.on(
             // BIENVENUE
             // --------------------------
 
-            if (
-                !config.welcome.enabled ||
-                !config.welcome.channelId
-            ) {
-                return;
-            }
-
-            const channel =
-                member.guild.channels.cache.get(
-                    config.welcome.channelId
-                );
-
-            if (
-                !channel ||
-                !channel.isTextBased()
-            ) {
-                return;
-            }
-
-            const content =
-                replaceWelcomeVariables(
-                    config.welcome.message,
-                    member
-                );
-
-            const embed =
-                createEmbed({
-                    title:
-                        "👋 Bienvenue !",
-                    description:
-                        content,
-                    color:
-                        COLORS.primary,
-                    thumbnail:
-                        member.user.displayAvatarURL({
-                            extension: "png",
-                            size: 512
-                        }),
-                    footer:
-                        member.guild.name
-                });
-
-            await channel.send({
-                embeds: [
-                    embed
-                ]
-            }).catch(
-                () => {}
-            );
+            if (!config.welcome.enabled || !config.welcome.channelId) return;
+            const channel = member.guild.channels.cache.get(config.welcome.channelId);
+            if (!channel?.isTextBased()) return;
+            await channel.send({ embeds: [buildWelcomeEmbed(member, config.welcome)] }).catch(() => {});
         } catch (error) {
             console.error(
                 "Erreur guildMemberAdd :",
