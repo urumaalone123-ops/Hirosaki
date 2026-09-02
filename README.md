@@ -25,6 +25,8 @@ pnpm run check
 
 Le bot utilise `+` comme préfixe. Les données persistantes sont enregistrées
 dans `data/hirosaki.json`, qui n'est pas versionné par Git.
+Les statistiques de messages, vocal et duos sont réinitialisées chaque dimanche
+à 00:00, selon l'heure de Paris.
 
 ## Commandes principales
 
@@ -61,6 +63,10 @@ des commandes des niveaux inférieurs.
 +embed #salon | titre | description
 +joinvoice
 ```
+
+`+leaderboard` affiche uniquement le top 1 messages, le top 1 vocal et le top 1
+duo vocal. `+snipe` affiche le dernier message supprimé du salon, y compris
+lorsque Discord le transmet sous forme partielle.
 
 ### Sanctions
 
