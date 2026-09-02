@@ -90,6 +90,7 @@ const DEFAULT_DATABASE = {
     giveaways: {},
     snipes: {},
     schedules: {},
+    recentMessages: {},
     statsReset: {
         lastResetKey: null
     }
@@ -1256,42 +1257,71 @@ function rememberMessage(
         return;
     }
 
+    const snapshot = {
+        id:
+            message.id,
+        guildId,
+        channelId,
+        content:
+            typeof message.content ===
+                "string"
+                ? message.content
+                : "",
+        authorId:
+            message.author?.id ||
+            null,
+        authorTag:
+            message.author?.tag ||
+            message.author?.username ||
+            "Utilisateur inconnu",
+        avatar:
+            message.author?.displayAvatarURL?.(
+                {
+                    extension: "png",
+                    size: 256
+                }
+            ) || null,
+        createdAt:
+            message.createdTimestamp ||
+            Date.now(),
+        attachments:
+            [
+                ...(message.attachments?.values?.() ||
+                    [])
+            ].map(
+                attachment =>
+                    attachment.url
+            )
+    };
+
     recentMessageSnapshots.set(
         message.id,
-        {
-            guildId,
-            channelId,
-            content:
-                typeof message.content ===
-                    "string"
-                    ? message.content
-                    : "",
-            authorId:
-                message.author?.id ||
-                null,
-            authorTag:
-                message.author?.tag ||
-                message.author?.username ||
-                "Utilisateur inconnu",
-            avatar:
-                message.author?.displayAvatarURL?.(
-                    {
-                        extension: "png",
-                        size: 256
-                    }
-                ) || null,
-            createdAt:
-                message.createdTimestamp ||
-                Date.now(),
-            attachments:
-                [
-                    ...(message.attachments?.values?.() ||
-                        [])
-                ].map(
-                    attachment =>
-                        attachment.url
-                )
-        }
+        snapshot
+    );
+
+    if (
+        !db.recentMessages[guildId]
+    ) {
+        db.recentMessages[guildId] =
+            {};
+    }
+
+    const channelSnapshots =
+        db.recentMessages[guildId][
+            channelId
+        ] || [];
+
+    db.recentMessages[guildId][
+        channelId
+    ] = [
+        ...channelSnapshots.filter(
+            item =>
+                item.id !==
+                message.id
+        ),
+        snapshot
+    ].slice(
+        -50
     );
 
     while (
@@ -1308,6 +1338,44 @@ function rememberMessage(
             oldestId
         );
     }
+}
+
+function findStoredMessageSnapshot(
+    messageId
+) {
+    const inMemory =
+        recentMessageSnapshots.get(
+            messageId
+        );
+
+    if (inMemory) {
+        return inMemory;
+    }
+
+    for (
+        const channelsByGuild of Object.values(
+            db.recentMessages || {}
+        )
+    ) {
+        for (
+            const snapshots of Object.values(
+                channelsByGuild || {}
+            )
+        ) {
+            const snapshot =
+                snapshots.find(
+                    item =>
+                        item.id ===
+                        messageId
+                );
+
+            if (snapshot) {
+                return snapshot;
+            }
+        }
+    }
+
+    return null;
 }
 
 // ============================================================
@@ -7723,7 +7791,7 @@ async function rememberDeletedMessage(
             message;
 
         const snapshot =
-            recentMessageSnapshots.get(
+            findStoredMessageSnapshot(
                 message.id
             );
 
