@@ -763,11 +763,11 @@ function createConfigInput(id, label, style, value, required = false) {
     return new ActionRowBuilder().addComponents(input);
 }
 
-async function showTemplateConfigModal(message, type, config) {
+async function showTemplateConfigModal(interaction, type, config) {
     const settings = type === "dm" ? config.dmSanctions : config.welcome;
     const isDM = type === "dm";
     const modal = new ModalBuilder()
-        .setCustomId("hirosaki_" + type + "_config:" + message.author.id)
+        .setCustomId("hirosaki_" + type + "_config:" + interaction.user.id)
         .setTitle(isDM ? "Configurer les DM de sanction" : "Configurer la bienvenue")
         .addComponents(
             createConfigInput("title", "Titre de l'embed", TextInputStyle.Short, settings.title || (isDM ? "⚠️ Sanction Hirosaki" : "👋 Bienvenue !"), true),
@@ -776,7 +776,26 @@ async function showTemplateConfigModal(message, type, config) {
             createConfigInput("footer", "Footer (variables acceptées)", TextInputStyle.Short, settings.footer || "{server}"),
             createConfigInput("image", "Image URL (facultatif)", TextInputStyle.Short, settings.image || "")
         );
-    await message.showModal(modal);
+    await interaction.showModal(modal);
+}
+
+function configFormButton(type, userId) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId("hirosaki_open_" + type + "_form:" + userId)
+            .setLabel("Ouvrir le formulaire")
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji("📝")
+    );
+}
+
+async function sendConfigFormButton(message, type) {
+    const label = type === "dm" ? "DM de sanction" : "message de bienvenue";
+    return message.reply({
+        embeds: [infoEmbed("📝 Clique sur le bouton ci-dessous pour configurer le " + label + ".")],
+        components: [configFormButton(type, message.author.id)],
+        allowedMentions: { repliedUser: false }
+    });
 }
 
 // ============================================================
@@ -4847,7 +4866,7 @@ registerCommand(
             const config = ensureGuild(message.guild.id);
             const action = (args.shift() || "").toLowerCase();
 
-            if (["form", "config", "configure"].includes(action)) return showTemplateConfigModal(message, "welcome", config);
+            if (["form", "config", "configure"].includes(action)) return sendConfigFormButton(message, "welcome");
 
             if (action === "off") {
                 config.welcome.enabled = false;
@@ -4967,7 +4986,7 @@ registerCommand(
             const config = ensureGuild(message.guild.id);
             const action = (args.shift() || "").toLowerCase();
 
-            if (["form", "config", "configure"].includes(action)) return showTemplateConfigModal(message, "dm", config);
+            if (["form", "config", "configure"].includes(action)) return sendConfigFormButton(message, "dm");
 
             if (action === "on" || action === "off") {
                 config.dmSanctions.enabled = action === "on";
@@ -6275,6 +6294,49 @@ function buildGiveawayEmbed(guild, giveaway, ended = false, winnerText = "") {
     });
 }
 
+function giveawayOptionError(options) {
+    const color = parseEmbedColor(options.color, COLORS.warning);
+    if (options.color && color === null) return "Couleur invalide.";
+    for (const key of ["image", "thumbnail"]) {
+        if (options[key] && !["none", "off", "server", "member", "user"].includes(options[key].toLowerCase()) && !isValidEmbedUrl(options[key])) return "URL d'image invalide pour l'option " + key + ".";
+    }
+    return null;
+}
+
+async function createGiveaway(guild, channel, { prize, winners, endAt, options = {} }) {
+    const giveawayId = generateGiveawayId();
+    const giveaway = {
+        id: giveawayId, guildId: guild.id, channelId: channel.id, messageId: null, prize, winners,
+        duration: endAt - Date.now(), endAt, title: options.title || "🎉 GIVEAWAY", endTitle: options["end-title"] || "🎉 Giveaway terminé",
+        description: options.description || null, endDescription: options["end-description"] || null, color: options.color || "#FEE75C",
+        footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
+        timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
+    };
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
+    );
+    const giveawayMessage = await channel.send({ embeds: [buildGiveawayEmbed(guild, giveaway)], components: [row] }).catch(() => null);
+    if (!giveawayMessage) return null;
+    giveaway.messageId = giveawayMessage.id;
+    ensureGiveaways(guild.id)[giveawayId] = giveaway;
+    saveDatabase();
+    return giveaway;
+}
+
+async function showGiveawayModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId("hirosaki_giveaway_config:" + interaction.user.id)
+        .setTitle("Créer un giveaway")
+        .addComponents(
+            createConfigInput("prize", "Prix à gagner", TextInputStyle.Short, "", true),
+            createConfigInput("winners", "Nombre de gagnants", TextInputStyle.Short, "1", true),
+            createConfigInput("duration", "Durée (ex: 3h, 2d)", TextInputStyle.Short, ""),
+            createConfigInput("endAt", "Fin exacte ISO avec fuseau", TextInputStyle.Short, ""),
+            createConfigInput("style", "Options séparées par ;", TextInputStyle.Paragraph, "title=🎁 Nitro Giveaway; color=#5865F2; footer=Bonne chance !")
+        );
+    await interaction.showModal(modal);
+}
+
 registerCommand(
     "giveaway",
     {
@@ -6284,6 +6346,14 @@ registerCommand(
             const action = (args.shift() || "").toLowerCase();
             const giveaways = ensureGiveaways(message.guild.id);
 
+            if (action === "form" || action === "config" || action === "configure") {
+                return message.reply({
+                    embeds: [infoEmbed("📝 Clique sur le bouton pour créer un giveaway. Renseigne soit une durée, soit une date de fin exacte.")],
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("hirosaki_open_giveaway_form:" + message.author.id).setLabel("Créer le giveaway").setEmoji("🎁").setStyle(ButtonStyle.Primary))],
+                    allowedMentions: { repliedUser: false }
+                });
+            }
+
             if (action === "start") {
                 const endInput = args.shift();
                 const endAt = parseGiveawayEndAt(endInput);
@@ -6292,37 +6362,16 @@ registerCommand(
                 const prizeParts = rawPrize.split("|").map(part => part.trim());
                 const prize = prizeParts.shift();
                 const options = parsePipeOptions(prizeParts);
-
                 if (!endAt || !winners || winners < 1 || !prize) return sendEmbed(message, errorEmbed(
-                    "Utilisation : " + PREFIX + "giveaway start 3h 1 Nitro\n" +
-                    "Date précise : " + PREFIX + "giveaway start 2026-09-04T21:00:00+02:00 1 Nitro\n" +
-                    "Options après | : title=..., description=..., color=#..., footer=..., image=URL, thumbnail=server|none, timestamp=off"
+                    "Utilisation : " + PREFIX + "giveaway form\n" +
+                    "Ou : " + PREFIX + "giveaway start 3h 1 Nitro\n" +
+                    "Options : title=..., description=..., color=#..., footer=..., image=URL, thumbnail=server|none, timestamp=off"
                 ));
-
-                const color = parseEmbedColor(options.color, COLORS.warning);
-                if (options.color && color === null) return sendEmbed(message, errorEmbed("❌ Couleur invalide."));
-                for (const key of ["image", "thumbnail"]) {
-                    if (options[key] && !["none", "off", "server", "member", "user"].includes(options[key].toLowerCase()) && !isValidEmbedUrl(options[key])) return sendEmbed(message, errorEmbed("❌ URL d'image invalide pour l'option " + key + "."));
-                }
-
-                const giveawayId = generateGiveawayId();
-                const giveaway = {
-                    id: giveawayId, guildId: message.guild.id, channelId: message.channel.id, messageId: null, prize, winners,
-                    duration: endAt - Date.now(), endAt, title: options.title || "🎉 GIVEAWAY", endTitle: options["end-title"] || "🎉 Giveaway terminé",
-                    description: options.description || null, endDescription: options["end-description"] || null, color: options.color || "#FEE75C",
-                    footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
-                    timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
-                };
-
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
-                );
-                const giveawayMessage = await message.channel.send({ embeds: [buildGiveawayEmbed(message.guild, giveaway)], components: [row] }).catch(() => null);
-                if (!giveawayMessage) return sendEmbed(message, errorEmbed("❌ Impossible de créer le giveaway."));
-                giveaway.messageId = giveawayMessage.id;
-                giveaways[giveawayId] = giveaway;
-                saveDatabase();
-                return sendEmbed(message, successEmbed("🎉 Giveaway créé !\nID : " + giveawayId + "\nFin : <t:" + Math.floor(endAt / 1000) + ":F>"));
+                const optionError = giveawayOptionError(options);
+                if (optionError) return sendEmbed(message, errorEmbed("❌ " + optionError));
+                const giveaway = await createGiveaway(message.guild, message.channel, { prize, winners, endAt, options });
+                if (!giveaway) return sendEmbed(message, errorEmbed("❌ Impossible de créer le giveaway."));
+                return sendEmbed(message, successEmbed("🎉 Giveaway créé !\nID : " + giveaway.id + "\nFin : <t:" + Math.floor(endAt / 1000) + ":F>"));
             }
 
             if (action === "reroll" || action === "rerooll") {
@@ -6345,8 +6394,8 @@ registerCommand(
 
             return sendEmbed(message, infoEmbed(
                 "Commandes giveaway :\n\n" +
+                PREFIX + "giveaway form\n" +
                 PREFIX + "giveaway start 3h 1 Nitro\n" +
-                PREFIX + "giveaway start 2026-09-04T21:00:00+02:00 1 Nitro\n" +
                 PREFIX + "giveaway end ID\n" +
                 PREFIX + "giveaway reroll ID"
             ));
@@ -6436,27 +6485,44 @@ client.on(
         if (interaction.isModalSubmit()) {
             try {
                 const [modalType, userId] = interaction.customId.split(":");
-                if (!["hirosaki_dm_config", "hirosaki_welcome_config"].includes(modalType) || userId !== interaction.user.id) return;
+                if (userId !== interaction.user.id) return;
 
-                const config = ensureGuild(interaction.guild.id);
-                const target = modalType === "hirosaki_dm_config" ? config.dmSanctions : config.welcome;
-                const defaultColor = modalType === "hirosaki_dm_config" ? "#ED4245" : "#5865F2";
-                const title = interaction.fields.getTextInputValue("title").trim();
-                const messageText = interaction.fields.getTextInputValue("message").trim();
-                const colorText = interaction.fields.getTextInputValue("color").trim();
-                const footer = interaction.fields.getTextInputValue("footer").trim();
-                const image = interaction.fields.getTextInputValue("image").trim();
-                if (!title || !messageText) return interaction.reply({ content: "❌ Le titre et le message sont obligatoires.", ephemeral: true });
-                if (colorText && parseEmbedColor(colorText, null) === null) return interaction.reply({ content: "❌ Couleur invalide. Utilise un nom intégré ou un code comme #5865F2.", ephemeral: true });
-                if (image && !isValidEmbedUrl(image)) return interaction.reply({ content: "❌ L'URL de l'image est invalide.", ephemeral: true });
+                if (modalType === "hirosaki_dm_config" || modalType === "hirosaki_welcome_config") {
+                    const config = ensureGuild(interaction.guild.id);
+                    const target = modalType === "hirosaki_dm_config" ? config.dmSanctions : config.welcome;
+                    const defaultColor = modalType === "hirosaki_dm_config" ? "#ED4245" : "#5865F2";
+                    const title = interaction.fields.getTextInputValue("title").trim();
+                    const messageText = interaction.fields.getTextInputValue("message").trim();
+                    const colorText = interaction.fields.getTextInputValue("color").trim();
+                    const footer = interaction.fields.getTextInputValue("footer").trim();
+                    const image = interaction.fields.getTextInputValue("image").trim();
+                    if (!title || !messageText) return interaction.reply({ content: "❌ Le titre et le message sont obligatoires.", ephemeral: true });
+                    if (colorText && parseEmbedColor(colorText, null) === null) return interaction.reply({ content: "❌ Couleur invalide. Utilise un nom intégré ou un code comme #5865F2.", ephemeral: true });
+                    if (image && !isValidEmbedUrl(image)) return interaction.reply({ content: "❌ L'URL de l'image est invalide.", ephemeral: true });
+                    target.title = title;
+                    target.message = messageText;
+                    target.color = colorText || defaultColor;
+                    target.footer = footer || "{server}";
+                    target.image = image || null;
+                    saveDatabase();
+                    return interaction.reply({ content: "✅ Configuration enregistrée. Utilise +" + (modalType === "hirosaki_dm_config" ? "dm test" : "welcome test") + " pour voir le rendu.", ephemeral: true });
+                }
 
-                target.title = title;
-                target.message = messageText;
-                target.color = colorText || defaultColor;
-                target.footer = footer || "{server}";
-                target.image = image || null;
-                saveDatabase();
-                return interaction.reply({ content: "✅ Configuration enregistrée. Utilise +" + (modalType === "hirosaki_dm_config" ? "dm test" : "welcome test") + " pour voir le rendu.", ephemeral: true });
+                if (modalType === "hirosaki_giveaway_config") {
+                    const prize = interaction.fields.getTextInputValue("prize").trim();
+                    const winners = Number(interaction.fields.getTextInputValue("winners").trim());
+                    const durationInput = interaction.fields.getTextInputValue("duration").trim();
+                    const endInput = interaction.fields.getTextInputValue("endAt").trim();
+                    const styleInput = interaction.fields.getTextInputValue("style").trim();
+                    const endAt = endInput ? parseGiveawayEndAt(endInput) : parseGiveawayEndAt(durationInput);
+                    const options = parsePipeOptions(styleInput.split(";").map(part => part.trim()));
+                    if (!prize || !winners || winners < 1 || !endAt) return interaction.reply({ content: "❌ Renseigne un prix, un nombre de gagnants et une durée ou une date de fin valide.", ephemeral: true });
+                    const optionError = giveawayOptionError(options);
+                    if (optionError) return interaction.reply({ content: "❌ " + optionError, ephemeral: true });
+                    const giveaway = await createGiveaway(interaction.guild, interaction.channel, { prize, winners, endAt, options });
+                    if (!giveaway) return interaction.reply({ content: "❌ Impossible de créer le giveaway dans ce salon.", ephemeral: true });
+                    return interaction.reply({ content: "✅ Giveaway créé. ID : " + giveaway.id + " — fin : <t:" + Math.floor(endAt / 1000) + ":F>", ephemeral: true });
+                }
             } catch (error) {
                 console.error("Erreur formulaire de configuration :", error);
                 if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "❌ Impossible d'enregistrer cette configuration.", ephemeral: true }).catch(() => {});
@@ -6467,6 +6533,19 @@ client.on(
         if (!interaction.isButton()) return;
 
         try {
+            if (interaction.customId.startsWith("hirosaki_open_dm_form:") || interaction.customId.startsWith("hirosaki_open_welcome_form:")) {
+                const [buttonType, userId] = interaction.customId.split(":");
+                if (userId !== interaction.user.id) return interaction.reply({ content: "❌ Ce formulaire appartient à une autre personne.", ephemeral: true });
+                const type = buttonType.includes("dm") ? "dm" : "welcome";
+                return showTemplateConfigModal(interaction, type, ensureGuild(interaction.guild.id));
+            }
+
+            if (interaction.customId.startsWith("hirosaki_open_giveaway_form:")) {
+                const userId = interaction.customId.split(":")[1];
+                if (userId !== interaction.user.id) return interaction.reply({ content: "❌ Ce formulaire appartient à une autre personne.", ephemeral: true });
+                return showGiveawayModal(interaction);
+            }
+
             if (interaction.customId === "hirosaki_ticket_create") {
                 await createTicketForMember(interaction);
                 return;
@@ -6481,7 +6560,6 @@ client.on(
                     await finishGiveaway(interaction.guild, giveawayId);
                     return interaction.reply({ embeds: [errorEmbed("❌ Ce giveaway vient de se terminer.")], ephemeral: true });
                 }
-
                 const entries = getGiveawayEntries(giveaway);
                 const index = entries.indexOf(interaction.user.id);
                 if (index !== -1) {
@@ -6490,7 +6568,6 @@ client.on(
                     saveDatabase();
                     return interaction.reply({ embeds: [infoEmbed("↩️ Tu as été retiré du giveaway.")], ephemeral: true });
                 }
-
                 entries.push(interaction.user.id);
                 giveaway.entries = entries;
                 saveDatabase();
