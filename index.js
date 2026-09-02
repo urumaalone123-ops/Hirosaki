@@ -6710,19 +6710,19 @@ registerCommand(
             const messageTop =
                 getMessageLeaderboard(
                     guild,
-                    5
+                    1
                 );
 
             const voiceTop =
                 getVoiceLeaderboard(
                     guild,
-                    5
+                    1
                 );
 
             const duoTop =
                 getDuoLeaderboard(
                     guild,
-                    5
+                    1
                 );
 
             const embed =
