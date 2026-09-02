@@ -1228,6 +1228,79 @@ function replaceWelcomeVariables(
 const voiceSessions =
     new Map();
 
+// Cache très court des messages reçus pour les suppressions
+// de messages partiels/non présents dans le cache Discord.
+const recentMessageSnapshots =
+    new Map();
+
+function rememberMessage(
+    message
+) {
+    if (
+        !message.guildId ||
+        !message.channelId ||
+        !message.id ||
+        message.author?.bot
+    ) {
+        return;
+    }
+
+    recentMessageSnapshots.set(
+        message.id,
+        {
+            guildId:
+                message.guildId,
+            channelId:
+                message.channelId,
+            content:
+                typeof message.content ===
+                    "string"
+                    ? message.content
+                    : "",
+            authorId:
+                message.author?.id ||
+                null,
+            authorTag:
+                message.author?.tag ||
+                message.author?.username ||
+                "Utilisateur inconnu",
+            avatar:
+                message.author?.displayAvatarURL?.(
+                    {
+                        extension: "png",
+                        size: 256
+                    }
+                ) || null,
+            createdAt:
+                message.createdTimestamp ||
+                Date.now(),
+            attachments:
+                [
+                    ...(message.attachments?.values?.() ||
+                        [])
+                ].map(
+                    attachment =>
+                        attachment.url
+                )
+        }
+    );
+
+    while (
+        recentMessageSnapshots.size >
+        1000
+    ) {
+        const oldestId =
+            recentMessageSnapshots
+                .keys()
+                .next()
+                .value;
+
+        recentMessageSnapshots.delete(
+            oldestId
+        );
+    }
+}
+
 // ============================================================
 // ANTI-DOUBLON COMMANDES
 // ============================================================
@@ -2827,17 +2900,65 @@ function getVoiceLeaderboard(
         guild.id
     );
 
-    return Object.entries(
-        db.voice[guild.id]
-    )
-        .map(
-            ([userId, duration]) => ({
+    const entries =
+        new Map(
+            Object.entries(
+                db.voice[guild.id]
+            ).map(
+                ([userId, duration]) => [
+                    userId,
+                    {
+                        userId,
+                        duration:
+                            Number(duration) ||
+                            0
+                    }
+                ]
+            )
+        );
+
+    const now =
+        Date.now();
+
+    for (
+        const [
+            key,
+            startedAt
+        ] of voiceSessions
+    ) {
+        const [
+            guildId,
+            userId
+        ] = key.split(":");
+
+        if (
+            guildId !== guild.id ||
+            typeof startedAt !==
+                "number"
+        ) {
+            continue;
+        }
+
+        const entry =
+            entries.get(userId) ||
+            {
                 userId,
-                duration:
-                    Number(duration) ||
-                    0
-            })
-        )
+                duration: 0
+            };
+
+        entry.duration +=
+            Math.max(
+                0,
+                now - startedAt
+            );
+
+        entries.set(
+            userId,
+            entry
+        );
+    }
+
+    return [...entries.values()]
         .filter(
             entry =>
                 entry.duration > 0
@@ -2980,20 +3101,77 @@ function getDuoLeaderboard(
         guild.id
     );
 
-    return Object.entries(
-        db.duos[guild.id]
-    )
-        .map(
-            ([key, duo]) => ({
+    const entries =
+        new Map(
+            Object.entries(
+                db.duos[guild.id]
+            ).map(
+                ([key, duo]) => [
+                    key,
+                    {
+                        key,
+                        users:
+                            duo.users || [],
+                        duration:
+                            Number(
+                                duo.duration
+                            ) || 0
+                    }
+                ]
+            )
+        );
+
+    const now =
+        Date.now();
+
+    for (
+        const [
+            sessionKey,
+            startedAt
+        ] of duoVoiceSessions
+    ) {
+        const parts =
+            sessionKey.split(":");
+
+        if (
+            parts.length !== 3 ||
+            parts[0] !== guild.id ||
+            typeof startedAt !==
+                "number"
+        ) {
+            continue;
+        }
+
+        const key =
+            createDuoKey(
+                parts[1],
+                parts[2]
+            );
+
+        const entry =
+            entries.get(key) ||
+            {
                 key,
-                users:
-                    duo.users || [],
-                duration:
-                    Number(
-                        duo.duration
-                    ) || 0
-            })
-        )
+                users: [
+                    parts[1],
+                    parts[2]
+                ],
+                duration: 0
+            };
+
+        entry.duration +=
+            Math.max(
+                0,
+                now - startedAt
+            );
+
+        entries.set(
+            key,
+            entry
+        );
+    }
+
+    return [...entries.values()]
         .filter(
             duo =>
                 duo.users.length ===
@@ -3160,19 +3338,19 @@ registerCommand(
             const messageTop =
                 getMessageLeaderboard(
                     guild,
-                    10
+                    1
                 );
 
             const voiceTop =
                 getVoiceLeaderboard(
                     guild,
-                    10
+                    1
                 );
 
             const duoTop =
                 getDuoLeaderboard(
                     guild,
-                    10
+                    1
                 );
 
             const leaderboardEmbed =
@@ -3374,6 +3552,13 @@ client.on(
 
         const guild =
             newState.guild;
+
+        if (
+            newState.member?.user.bot ||
+            oldState.member?.user.bot
+        ) {
+            return;
+        }
 
         const userId =
             newState.id;
@@ -3601,19 +3786,19 @@ async function sendScheduledLeaderboard(
     const messageTop =
         getMessageLeaderboard(
             guild,
-            10
+            1
         );
 
     const voiceTop =
         getVoiceLeaderboard(
             guild,
-            10
+            1
         );
 
     const duoTop =
         getDuoLeaderboard(
             guild,
-            10
+            1
         );
 
     const leaderboardEmbed =
@@ -7354,62 +7539,135 @@ client.on(
 // SNIPE — SUPPRESSION DE MESSAGE
 // ============================================================
 
-client.on(
-    "messageDelete",
-    async message => {
-        try {
-            if (
-                !message.guild ||
-                !message.author ||
-                message.author.bot
-            ) {
-                return;
-            }
+async function rememberDeletedMessage(
+    message
+) {
+    try {
+        if (
+            !message ||
+            message.author?.bot
+        ) {
+            return;
+        }
 
-            const guildData =
-                ensureGuild(
-                    message.guild.id
-                );
+        // Une suppression peut fournir un message partiel.
+        // Le fetch est tenté, puis le snapshot local sert de
+        // secours si Discord ne permet plus de relire le message.
+        let deletedMessage =
+            message;
 
-            if (
-                !guildData.snipes
-            ) {
-                guildData.snipes = {};
-            }
+        if (
+            message.partial
+        ) {
+            deletedMessage =
+                await message.fetch()
+                    .catch(
+                        () => message
+                    );
+        }
 
-            guildData.snipes[
-                message.channel.id
-            ] = {
-                content:
-                    message.content ||
-                    "*Aucun contenu texte*",
-                authorId:
-                    message.author.id,
-                authorTag:
-                    message.author.tag,
-                avatar:
-                    message.author.displayAvatarURL({
+        const snapshot =
+            recentMessageSnapshots.get(
+                message.id
+            );
+
+        const guildId =
+            deletedMessage.guildId ||
+            deletedMessage.guild?.id ||
+            snapshot?.guildId;
+
+        const channelId =
+            deletedMessage.channelId ||
+            deletedMessage.channel?.id ||
+            snapshot?.channelId;
+
+        if (
+            !guildId ||
+            !channelId
+        ) {
+            return;
+        }
+
+        const author =
+            deletedMessage.author;
+
+        const content =
+            typeof deletedMessage.content ===
+                "string" &&
+            deletedMessage.content.length
+                ? deletedMessage.content
+                : snapshot?.content || "";
+
+        const attachments =
+            [
+                ...(deletedMessage.attachments?.values?.() ||
+                    [])
+            ].map(
+                attachment =>
+                    attachment.url
+            );
+
+        const guildData =
+            ensureGuild(
+                guildId
+            );
+
+        guildData.snipes[
+            channelId
+        ] = {
+            content,
+            authorId:
+                author?.id ||
+                snapshot?.authorId ||
+                null,
+            authorTag:
+                author?.tag ||
+                snapshot?.authorTag ||
+                "Utilisateur inconnu",
+            avatar:
+                author?.displayAvatarURL?.(
+                    {
                         extension: "png",
                         size: 256
-                    }),
-                createdAt:
-                    message.createdTimestamp,
-                deletedAt:
-                    Date.now(),
-                attachments:
-                    [
-                        ...message.attachments.values()
-                    ].map(
-                        attachment =>
-                            attachment.url
-                    )
-            };
+                    }
+                ) ||
+                snapshot?.avatar ||
+                null,
+            createdAt:
+                deletedMessage.createdTimestamp ||
+                snapshot?.createdAt ||
+                Date.now(),
+            deletedAt:
+                Date.now(),
+            attachments:
+                attachments.length
+                    ? attachments
+                    : snapshot?.attachments ||
+                        []
+        };
 
-            saveDatabase();
-        } catch (error) {
-            console.error(
-                "Erreur messageDelete :",
-                error
+        saveDatabase();
+    } catch (error) {
+        console.error(
+            "Erreur messageDelete :",
+            error
+        );
+    }
+}
+
+client.on(
+    "messageDelete",
+    rememberDeletedMessage
+);
+
+client.on(
+    "messageDeleteBulk",
+    async messages => {
+        for (
+            const message of messages.values()
+        ) {
+            await rememberDeletedMessage(
+                message
             );
         }
     }
@@ -7428,6 +7686,14 @@ client.on(
             ) {
                 return;
             }
+
+            rememberMessage(
+                message
+            );
+
+            recordMessage(
+                message
+            );
 
             const parsed =
                 getCommandFromMessage(
@@ -7518,159 +7784,6 @@ client.on(
     }
 );
 // ============================================================
-// TRACKING MESSAGES POUR LE LEADERBOARD
-// ============================================================
-
-client.on(
-    "messageCreate",
-    async message => {
-        try {
-            if (
-                !message.guild ||
-                message.author.bot
-            ) {
-                return;
-            }
-
-            const guildData =
-                ensureGuild(
-                    message.guild.id
-                );
-
-            if (
-                !guildData.stats.messages[
-                    message.author.id
-                ]
-            ) {
-                guildData.stats.messages[
-                    message.author.id
-                ] = 0;
-            }
-
-            guildData.stats.messages[
-                message.author.id
-            ]++;
-
-            saveDatabase();
-        } catch (error) {
-            console.error(
-                "Erreur tracking message :",
-                error
-            );
-        }
-    }
-);
-
-// ============================================================
-// TRACKING VOCAL
-// ============================================================
-
-client.on(
-    "voiceStateUpdate",
-    async (
-        oldState,
-        newState
-    ) => {
-        try {
-            const member =
-                newState.member ||
-                oldState.member;
-
-            if (
-                !member ||
-                member.user.bot
-            ) {
-                return;
-            }
-
-            const key =
-                `${member.guild.id}:${member.id}`;
-
-            // Entrée en vocal
-            if (
-                !oldState.channelId &&
-                newState.channelId
-            ) {
-                voiceSessions.set(
-                    key,
-                    {
-                        startedAt:
-                            Date.now(),
-                        channelId:
-                            newState.channelId
-                    }
-                );
-
-                return;
-            }
-
-            // Changement de salon vocal
-            if (
-                oldState.channelId &&
-                newState.channelId &&
-                oldState.channelId !==
-                    newState.channelId
-            ) {
-                const session =
-                    voiceSessions.get(
-                        key
-                    );
-
-                if (session) {
-                    await addVoiceTime(
-                        member.guild,
-                        member.id,
-                        Date.now() -
-                            session.startedAt
-                    );
-                }
-
-                voiceSessions.set(
-                    key,
-                    {
-                        startedAt:
-                            Date.now(),
-                        channelId:
-                            newState.channelId
-                    }
-                );
-
-                return;
-            }
-
-            // Sortie du vocal
-            if (
-                oldState.channelId &&
-                !newState.channelId
-            ) {
-                const session =
-                    voiceSessions.get(
-                        key
-                    );
-
-                if (session) {
-                    await addVoiceTime(
-                        member.guild,
-                        member.id,
-                        Date.now() -
-                            session.startedAt
-                    );
-                }
-
-                voiceSessions.delete(
-                    key
-                );
-            }
-        } catch (error) {
-            console.error(
-                "Erreur voiceStateUpdate :",
-                error
-            );
-        }
-    }
-);
-
-// ============================================================
 // SAUVEGARDE DES SESSIONS VOCALES AU REDÉMARRAGE
 // ============================================================
 
@@ -7681,7 +7794,7 @@ async function closeVoiceSessions() {
     for (
         const [
             key,
-            session
+            startedAt
         ] of voiceSessions
     ) {
         const parts =
@@ -7702,14 +7815,85 @@ async function closeVoiceSessions() {
             continue;
         }
 
-        await addVoiceTime(
-            guild,
-            userId,
-            now - session.startedAt
+        if (
+            typeof startedAt !==
+            "number"
+        ) {
+            continue;
+        }
+
+        ensureMemberStats(
+            guildId,
+            userId
         );
+
+        db.voice[guildId][userId] +=
+            Math.max(
+                0,
+                now - startedAt
+            );
     }
 
     voiceSessions.clear();
+
+    for (
+        const [
+            sessionKey,
+            startedAt
+        ] of duoVoiceSessions
+    ) {
+        const parts =
+            sessionKey.split(":");
+
+        if (
+            parts.length !== 3 ||
+            typeof startedAt !==
+                "number"
+        ) {
+            continue;
+        }
+
+        const guildId =
+            parts[0];
+
+        const userA =
+            parts[1];
+
+        const userB =
+            parts[2];
+
+        ensureGuild(
+            guildId
+        );
+
+        const duoKey =
+            createDuoKey(
+                userA,
+                userB
+            );
+
+        if (
+            !db.duos[guildId][duoKey]
+        ) {
+            db.duos[guildId][duoKey] = {
+                users: [
+                    userA,
+                    userB
+                ],
+                duration: 0
+            };
+        }
+
+        db.duos[guildId][duoKey]
+            .duration +=
+            Math.max(
+                0,
+                now - startedAt
+            );
+    }
+
+    duoVoiceSessions.clear();
+    saveDatabase();
 }
 
 // ============================================================
