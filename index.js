@@ -1378,6 +1378,105 @@ function findStoredMessageSnapshot(
     return null;
 }
 
+function getRecentChannelSnapshots(
+    guildId,
+    channelId
+) {
+    const persisted =
+        db.recentMessages?.[
+            guildId
+        ]?.[
+            channelId
+        ];
+
+    const snapshots =
+        Array.isArray(
+            persisted
+        )
+            ? persisted
+            : [];
+
+    return [
+        ...snapshots
+    ].sort(
+        (a, b) =>
+            (Number(b.createdAt) || 0) -
+            (Number(a.createdAt) || 0)
+    );
+}
+
+async function recoverDeletedMessage(
+    message
+) {
+    const guildId =
+        message.guildId ||
+        message.guild?.id;
+
+    const channelId =
+        message.channelId ||
+        message.channel?.id;
+
+    if (
+        !guildId ||
+        !channelId ||
+        !message.channel?.messages?.fetch
+    ) {
+        return null;
+    }
+
+    const snapshots =
+        getRecentChannelSnapshots(
+            guildId,
+            channelId
+        ).filter(
+            snapshot =>
+                snapshot.id !==
+                    message.id &&
+                (Number(
+                    snapshot.createdAt
+                ) || 0) <=
+                    (Number(
+                        message.createdTimestamp
+                    ) || Date.now())
+        );
+
+    if (
+        snapshots.length ===
+        0
+    ) {
+        return null;
+    }
+
+    const recentMessages =
+        await message.channel.messages
+            .fetch({
+                limit: 100
+            })
+            .catch(
+                () => null
+            );
+
+    if (
+        !recentMessages
+    ) {
+        return null;
+    }
+
+    const existingIds =
+        new Set(
+            recentMessages.keys()
+        );
+
+    return (
+        snapshots.find(
+            snapshot =>
+                !existingIds.has(
+                    snapshot.id
+                )
+        ) || null
+    );
+}
+
 // ============================================================
 // ANTI-DOUBLON COMMANDES
 // ============================================================
@@ -1662,10 +1761,37 @@ registerCommand(
                     message.guild.id
                 ];
 
-            const data =
+            let data =
                 guildSnipes?.[
                     message.channel.id
                 ];
+
+            if (
+                !data
+            ) {
+                const recovered =
+                    await recoverDeletedMessage(
+                        message
+                    );
+
+                if (
+                    recovered
+                ) {
+                    data = {
+                        ...recovered,
+                        deletedAt:
+                            Date.now()
+                    };
+
+                    db.snipes[
+                        message.guild.id
+                    ][
+                        message.channel.id
+                    ] = data;
+
+                    saveDatabase();
+                }
+            }
 
             if (!data) {
                 return sendEmbed(
