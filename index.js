@@ -6264,7 +6264,7 @@ registerCommand(
                   activeVoiceConnections.set(guildId, connection);
                   monitorVoiceConnection(connection);
 
-                    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+                    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
                 return sendEmbed(message, successEmbed("🎙️ Je suis maintenant connecté à " + voiceChannel + "."));
             } catch (error) {
                 const reason = error instanceof Error ? error.message : String(error);
@@ -6273,7 +6273,9 @@ registerCommand(
                 const connection = activeVoiceConnections.get(message.guild.id);
                 if (connection) connection.destroy();
                 activeVoiceConnections.delete(message.guild.id);
-                return sendEmbed(message, errorEmbed("❌ Impossible de me connecter à ce salon vocal. Vérifie que le bot possède les permissions **Voir le salon** et **Se connecter**."));
+                const detail = reason.length > 160 ? reason.slice(0, 157) + "…" : reason;
+                 return sendEmbed(message, errorEmbed("❌ Impossible de me connecter à ce salon vocal. Vérifie que le bot possède les permissions **Voir le salon** et **Se connecter**.
+Détail : `" + detail + "`"));
             }
         }
     }
