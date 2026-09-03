@@ -6384,6 +6384,25 @@ function giveawayOptionError(options) {
     return null;
 }
 
+function buildGiveawayComponents(giveaway, ended = false) {
+    if (ended) return [];
+    const participantCount = getGiveawayEntries(giveaway).length;
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId("hirosaki_giveaway_join:" + giveaway.id)
+                .setLabel("Participer")
+                .setEmoji("🎉")
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId("hirosaki_giveaway_count:" + giveaway.id)
+                .setLabel("Participants : " + participantCount)
+                .setEmoji("👥")
+                .setStyle(ButtonStyle.Secondary)
+        )
+    ];
+}
+
 async function createGiveaway(guild, channel, { prize, winners, endAt, options = {} }) {
     const giveawayId = generateGiveawayId();
     const giveaway = {
@@ -6393,10 +6412,10 @@ async function createGiveaway(guild, channel, { prize, winners, endAt, options =
         footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
         timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
     };
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
-    );
-    const giveawayMessage = await channel.send({ embeds: [buildGiveawayEmbed(guild, giveaway)], components: [row] }).catch(() => null);
+    const giveawayMessage = await channel.send({
+        embeds: [buildGiveawayEmbed(guild, giveaway)],
+        components: buildGiveawayComponents(giveaway)
+    }).catch(() => null);
     if (!giveawayMessage) return null;
     giveaway.messageId = giveawayMessage.id;
     ensureGiveaways(guild.id)[giveawayId] = giveaway;
@@ -6873,6 +6892,17 @@ client.on(
                 return interaction.reply({ content: selected.length ? "✅ Vote enregistré pour : " + poll.options[optionIndex] : "↩️ Vote retiré.", ephemeral: true });
             }
 
+            if (interaction.customId.startsWith("hirosaki_giveaway_count:")) {
+                const giveawayId = interaction.customId.split(":")[1];
+                const giveaway = ensureGiveaways(interaction.guild.id)[giveawayId];
+                if (!giveaway) return interaction.reply({ embeds: [errorEmbed("❌ Ce giveaway est introuvable.")], ephemeral: true });
+                const participantCount = getGiveawayEntries(giveaway).length;
+                return interaction.reply({
+                    content: "👥 Ce giveaway compte actuellement **" + participantCount + " participant" + (participantCount > 1 ? "s" : "") + "**.",
+                    ephemeral: true
+                });
+            }
+
             if (interaction.customId.startsWith("hirosaki_giveaway_join:")) {
                 const giveawayId = interaction.customId.split(":")[1];
                 const giveaways = ensureGiveaways(interaction.guild.id);
@@ -6888,11 +6918,13 @@ client.on(
                     entries.splice(index, 1);
                     giveaway.entries = entries;
                     saveDatabase();
+                    await interaction.message.edit({ components: buildGiveawayComponents(giveaway) }).catch(() => {});
                     return interaction.reply({ embeds: [infoEmbed("↩️ Tu as été retiré du giveaway.")], ephemeral: true });
                 }
                 entries.push(interaction.user.id);
                 giveaway.entries = entries;
                 saveDatabase();
+                await interaction.message.edit({ components: buildGiveawayComponents(giveaway) }).catch(() => {});
                 return interaction.reply({ embeds: [successEmbed("🎉 Tu participes maintenant au giveaway !")], ephemeral: true });
             }
         } catch (error) {
