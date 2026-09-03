@@ -4980,6 +4980,144 @@ registerCommand(
 );
 
 // ============================================================
+// LISTE DES RÔLES STAFF
+// ============================================================
+
+const ROLE_BOARD_DEFINITIONS = [
+    { label: "👑 Crown", roleName: CROWN_ROLE_NAME },
+    { label: "⭐ Co-owner", roleName: PERMISSION_ROLES[5] },
+    { label: "🛡️ Responsable staff", roleName: PERMISSION_ROLES[4] },
+    { label: "🔧 Staff", roleName: PERMISSION_ROLES[3] },
+    { label: "🔨 Modérateur", roleName: PERMISSION_ROLES[2] },
+    { label: "🧪 Modérateur test", roleName: PERMISSION_ROLES[1] }
+];
+
+function getRoleBoardConfig(guildId) {
+    const config = ensureGuild(guildId);
+    if (!config.roleBoard || typeof config.roleBoard !== "object") {
+        config.roleBoard = { channelId: null, messageId: null };
+    }
+    return config.roleBoard;
+}
+
+function formatRoleBoardMembers(role) {
+    if (!role) return "Rôle introuvable sur ce serveur.";
+    const mentions = [...role.members.values()].map(member => "<@" + member.id + ">");
+    if (!mentions.length) return "Aucun membre";
+    let output = "";
+    let displayed = 0;
+    for (const mention of mentions) {
+        const addition = output ? ", " + mention : mention;
+        if (output.length + addition.length > 1000) break;
+        output += addition;
+        displayed++;
+    }
+    if (displayed < mentions.length) output += "\n… et " + (mentions.length - displayed) + " autre(s)";
+    return output;
+}
+
+function buildRoleBoardEmbed(guild) {
+    const embed = createEmbed({
+        title: "👥 Équipe Hirosaki",
+        description: "Voici les membres actuellement présents dans les rôles staff.",
+        color: COLORS.primary,
+        thumbnail: guild.iconURL({ extension: "png", size: 512 }),
+        footer: guild.name + " • Mise à jour automatique"
+    });
+
+    for (const definition of ROLE_BOARD_DEFINITIONS) {
+        const role = findRoleByName(guild, definition.roleName);
+        embed.addFields({
+            name: definition.label,
+            value: formatRoleBoardMembers(role),
+            inline: false
+        });
+    }
+
+    embed.addFields({
+        name: "📋 Conditions pour le staff",
+        value: "• Minimum cinq heures de vocal\n" +
+            "• Être depuis au moins cinq jours sur le serveur\n" +
+            "• Être actif\n\n" +
+            "Si ces conditions sont respectées, n'hésitez pas à postuler en faisant un ticket.",
+        inline: false
+    });
+
+    return embed;
+}
+
+async function refreshRoleBoard(guild, { fallbackChannel = null, fetchMembers = false, createIfMissing = true } = {}) {
+    const boardConfig = getRoleBoardConfig(guild.id);
+    if (fetchMembers) await guild.members.fetch().catch(() => {});
+
+    let channel = boardConfig.channelId
+        ? guild.channels.cache.get(boardConfig.channelId)
+        : fallbackChannel;
+    if (!channel?.isTextBased()) return null;
+
+    let boardMessage = null;
+    if (boardConfig.messageId) {
+        boardMessage = await channel.messages.fetch(boardConfig.messageId).catch(() => null);
+    }
+
+    if (boardMessage) {
+        await boardMessage.edit({ embeds: [buildRoleBoardEmbed(guild)] });
+        return boardMessage;
+    }
+
+    if (!createIfMissing) return null;
+    boardMessage = await channel.send({ embeds: [buildRoleBoardEmbed(guild)] }).catch(() => null);
+    if (!boardMessage) return null;
+
+    boardConfig.channelId = channel.id;
+    boardConfig.messageId = boardMessage.id;
+    saveDatabase();
+    return boardMessage;
+}
+
+const roleBoardRefreshTimers = new Map();
+
+function scheduleRoleBoardRefresh(guild) {
+    const boardConfig = getRoleBoardConfig(guild.id);
+    if (!boardConfig.messageId) return;
+    const previousTimer = roleBoardRefreshTimers.get(guild.id);
+    if (previousTimer) clearTimeout(previousTimer);
+    const timer = setTimeout(async () => {
+        roleBoardRefreshTimers.delete(guild.id);
+        await refreshRoleBoard(guild, { createIfMissing: false }).catch(() => {});
+    }, 750);
+    roleBoardRefreshTimers.set(guild.id, timer);
+}
+
+registerCommand(
+    "roles",
+    {
+        permission: 0,
+        aliases: ["staff-list", "role-list"],
+        execute: async message => {
+            const boardMessage = await refreshRoleBoard(message.guild, {
+                fallbackChannel: message.channel,
+                fetchMembers: true,
+                createIfMissing: true
+            });
+            if (!boardMessage) return sendEmbed(message, errorEmbed("❌ Impossible d'afficher la liste des rôles dans ce salon."));
+            return sendEmbed(message, successEmbed("✅ La liste des rôles a été actualisée automatiquement."));
+        }
+    }
+);
+
+client.on(
+    "guildMemberUpdate",
+    async (oldMember, newMember) => {
+        const oldRoles = oldMember.roles.cache;
+        const newRoles = newMember.roles.cache;
+        const rolesChanged = oldRoles.size !== newRoles.size || [...newRoles.keys()].some(roleId => !oldRoles.has(roleId));
+        if (!rolesChanged) return;
+        scheduleRoleBoardRefresh(newMember.guild);
+    }
+);
+
+// ============================================================
 // PARTIE 5/6 — TICKETS, RANK/DERANK, VOCAL & GIVEAWAYS
 // ============================================================
 
