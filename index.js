@@ -91,6 +91,7 @@ const DEFAULT_DATABASE = {
     voice: {},
     duos: {},
     giveaways: {},
+    polls: {},
     snipes: {},
     schedules: {},
     recentMessages: {},
@@ -6508,6 +6509,172 @@ setInterval(
 );
 
 // ============================================================
+// SONDAGES PERSONNALISÉS
+// ============================================================
+
+function ensurePolls(guildId) {
+    if (!db.polls || typeof db.polls !== "object") db.polls = {};
+    if (!db.polls[guildId] || typeof db.polls[guildId] !== "object") db.polls[guildId] = {};
+    return db.polls[guildId];
+}
+
+function generatePollId() {
+    return "poll-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+function parsePollChoices(value) {
+    const choices = String(value || "").split(/\r?\n/).map(choice => choice.trim()).filter(Boolean);
+    if (choices.length < 2) return { error: "Renseigne au moins deux choix, un par ligne." };
+    if (choices.length > 10) return { error: "Un sondage peut contenir au maximum dix choix." };
+    if (choices.some(choice => choice.length > 80)) return { error: "Chaque choix doit faire au maximum 80 caractères." };
+    const normalized = choices.map(choice => choice.toLowerCase());
+    if (new Set(normalized).size !== normalized.length) return { error: "Les choix doivent être différents." };
+    return { choices };
+}
+
+function parsePollBoolean(value) {
+    return ["oui", "yes", "true", "1", "multiple", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function buildPollComponents(poll) {
+    if (poll.ended) return [];
+    const rows = [];
+    for (let index = 0; index < poll.options.length; index += 5) {
+        const row = new ActionRowBuilder();
+        for (let optionIndex = index; optionIndex < Math.min(index + 5, poll.options.length); optionIndex++) {
+            const option = poll.options[optionIndex];
+            row.addComponents(
+                new ButtonBuilder()
+                    .setCustomId("hirosaki_poll_vote:" + poll.id + ":" + optionIndex)
+                    .setLabel((optionIndex + 1) + ". " + option.slice(0, 76))
+                    .setStyle(ButtonStyle.Primary)
+            );
+        }
+        rows.push(row);
+    }
+    rows.push(
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId("hirosaki_poll_end:" + poll.id)
+                .setLabel("Clôturer le sondage")
+                .setEmoji("🛑")
+                .setStyle(ButtonStyle.Danger)
+        )
+    );
+    return rows;
+}
+
+function buildPollEmbed(guild, poll) {
+    const votes = poll.votes && typeof poll.votes === "object" ? poll.votes : {};
+    const counts = poll.options.map(() => 0);
+    for (const selectedOptions of Object.values(votes)) {
+        for (const optionIndex of Array.isArray(selectedOptions) ? selectedOptions : []) {
+            if (counts[optionIndex] !== undefined) counts[optionIndex]++;
+        }
+    }
+    const voterCount = Object.keys(votes).length;
+    const lines = poll.options.map((option, index) => {
+        const percentage = voterCount ? Math.round((counts[index] / voterCount) * 100) : 0;
+        return "**" + (index + 1) + ". " + option + "** — " + counts[index] + " vote(s) · " + percentage + "%";
+    });
+    const mode = poll.allowMultiple ? "Tu peux sélectionner plusieurs choix." : "Un seul choix par personne.";
+    const end = poll.endAt ? "Fin : <t:" + Math.floor(poll.endAt / 1000) + ":R>" : "Pas de fin automatique — utilise le bouton pour clôturer.";
+    const status = poll.ended ? "\n\n🔒 **Sondage terminé**" : "";
+    return createEmbed({
+        title: poll.title + (poll.ended ? " • Terminé" : ""),
+        description: "## " + poll.question + "\n\n" + lines.join("\n") + "\n\n👥 " + voterCount + " votant(s)\n" + mode + "\n" + end + status,
+        color: parseEmbedColor(poll.color, COLORS.primary),
+        thumbnail: resolveEmbedImage(poll.thumbnail, guild, null, null),
+        image: resolveEmbedImage(poll.image, guild, null, null),
+        footer: poll.footer || (guild.name + " • Sondage"),
+        timestamp: poll.timestamp !== false
+    });
+}
+
+async function createPoll(guild, channel, data) {
+    const poll = {
+        id: generatePollId(),
+        guildId: guild.id,
+        channelId: channel.id,
+        messageId: null,
+        creatorId: data.creatorId,
+        title: data.title,
+        question: data.question,
+        options: data.options,
+        allowMultiple: data.allowMultiple,
+        color: data.color,
+        footer: data.footer,
+        thumbnail: data.thumbnail,
+        image: data.image,
+        timestamp: data.timestamp,
+        endAt: data.endAt,
+        votes: {},
+        ended: false
+    };
+    const pollMessage = await channel.send({ embeds: [buildPollEmbed(guild, poll)], components: buildPollComponents(poll) }).catch(() => null);
+    if (!pollMessage) return null;
+    poll.messageId = pollMessage.id;
+    ensurePolls(guild.id)[poll.id] = poll;
+    saveDatabase();
+    return poll;
+}
+
+async function finishPoll(guild, pollId, messageOverride = null) {
+    const poll = ensurePolls(guild.id)[pollId];
+    if (!poll || poll.ended) return false;
+    poll.ended = true;
+    saveDatabase();
+    let pollMessage = messageOverride;
+    if (!pollMessage) {
+        const channel = guild.channels.cache.get(poll.channelId);
+        if (channel?.isTextBased()) pollMessage = await channel.messages.fetch(poll.messageId).catch(() => null);
+    }
+    if (pollMessage) await pollMessage.edit({ embeds: [buildPollEmbed(guild, poll)], components: [] }).catch(() => {});
+    return true;
+}
+
+async function showPollModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId("hirosaki_poll_config:" + interaction.user.id)
+        .setTitle("Créer un sondage")
+        .addComponents(
+            createConfigInput("title", "Titre du sondage", TextInputStyle.Short, "📊 Sondage", true),
+            createConfigInput("question", "Question", TextInputStyle.Paragraph, "", true),
+            createConfigInput("choices", "Choix, un par ligne (2 à 10)", TextInputStyle.Paragraph, "", true),
+            createConfigInput("duration", "Durée ou date exacte (facultatif)", TextInputStyle.Short, "1d"),
+            createConfigInput("style", "Options séparées par ;", TextInputStyle.Paragraph, "color=#5865F2; footer=Merci pour votre vote !")
+        );
+    await interaction.showModal(modal);
+}
+
+registerCommand(
+    "sondage",
+    {
+        permission: 0,
+        aliases: ["poll", "sondage-form"],
+        execute: async message => {
+            return message.reply({
+                embeds: [infoEmbed("📝 Clique sur le bouton ci-dessous pour créer un sondage entièrement personnalisable.")],
+                components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("hirosaki_open_poll_form:" + message.author.id).setLabel("Créer le sondage").setEmoji("📊").setStyle(ButtonStyle.Primary))],
+                allowedMentions: { repliedUser: false }
+            });
+        }
+    }
+);
+
+setInterval(
+    async () => {
+        const now = Date.now();
+        for (const guild of client.guilds.cache.values()) {
+            for (const poll of Object.values(ensurePolls(guild.id))) {
+                if (!poll.ended && poll.endAt && poll.endAt <= now) await finishPoll(guild, poll.id);
+            }
+        }
+    },
+    5_000
+);
+
+// ============================================================
 // INTERACTIONS — TICKETS & GIVEAWAYS
 // ============================================================
 
@@ -6518,6 +6685,37 @@ client.on(
             try {
                 const [modalType, userId] = interaction.customId.split(":");
                 if (userId !== interaction.user.id) return;
+
+                if (modalType === "hirosaki_poll_config") {
+                    const title = interaction.fields.getTextInputValue("title").trim();
+                    const question = interaction.fields.getTextInputValue("question").trim();
+                    const choiceResult = parsePollChoices(interaction.fields.getTextInputValue("choices"));
+                    const durationInput = interaction.fields.getTextInputValue("duration").trim();
+                    const styleInput = interaction.fields.getTextInputValue("style").trim();
+                    const style = parsePipeOptions(styleInput.split(";").map(part => part.trim()));
+                    const endAt = durationInput ? parseGiveawayEndAt(durationInput) : null;
+                    if (!title || !question) return interaction.reply({ content: "❌ Le titre et la question sont obligatoires.", ephemeral: true });
+                    if (choiceResult.error) return interaction.reply({ content: "❌ " + choiceResult.error, ephemeral: true });
+                    if (durationInput && !endAt) return interaction.reply({ content: "❌ Durée ou date de fin invalide. Exemples : 30m, 2h, 3d ou 2026-09-05T20:00:00+02:00.", ephemeral: true });
+                    if (endAt && endAt - Date.now() < 10_000) return interaction.reply({ content: "❌ La durée doit laisser au moins 10 secondes de vote.", ephemeral: true });
+                    const optionError = giveawayOptionError(style);
+                    if (optionError) return interaction.reply({ content: "❌ " + optionError, ephemeral: true });
+                    const poll = await createPoll(interaction.guild, interaction.channel, {
+                        creatorId: interaction.user.id,
+                        title,
+                        question,
+                        options: choiceResult.choices,
+                        allowMultiple: parsePollBoolean(style.multiple),
+                        color: style.color || "#5865F2",
+                        footer: style.footer || null,
+                        thumbnail: style.thumbnail || null,
+                        image: style.image || null,
+                        timestamp: String(style.timestamp || "").toLowerCase() !== "off",
+                        endAt
+                    });
+                    if (!poll) return interaction.reply({ content: "❌ Impossible de créer le sondage dans ce salon.", ephemeral: true });
+                    return interaction.reply({ content: "✅ Sondage créé" + (endAt ? " — fin : <t:" + Math.floor(endAt / 1000) + ":F>" : ""), ephemeral: true });
+                }
 
                 if (modalType === "hirosaki_dm_config" || modalType === "hirosaki_welcome_config") {
                     const config = ensureGuild(interaction.guild.id);
@@ -6572,6 +6770,12 @@ client.on(
                 return showTemplateConfigModal(interaction, type, ensureGuild(interaction.guild.id));
             }
 
+            if (interaction.customId.startsWith("hirosaki_open_poll_form:")) {
+                const userId = interaction.customId.split(":")[1];
+                if (userId !== interaction.user.id) return interaction.reply({ content: "❌ Ce formulaire appartient à une autre personne.", ephemeral: true });
+                return showPollModal(interaction);
+            }
+
             if (interaction.customId.startsWith("hirosaki_open_giveaway_form:")) {
                 const userId = interaction.customId.split(":")[1];
                 if (userId !== interaction.user.id) return interaction.reply({ content: "❌ Ce formulaire appartient à une autre personne.", ephemeral: true });
@@ -6581,6 +6785,43 @@ client.on(
             if (interaction.customId === "hirosaki_ticket_create") {
                 await createTicketForMember(interaction);
                 return;
+            }
+
+            if (interaction.customId.startsWith("hirosaki_poll_end:")) {
+                const pollId = interaction.customId.split(":")[1];
+                const poll = ensurePolls(interaction.guild.id)[pollId];
+                if (!poll || poll.ended) return interaction.reply({ content: "❌ Ce sondage est déjà terminé ou introuvable.", ephemeral: true });
+                if (poll.creatorId !== interaction.user.id && !hasPermission(interaction.member, 4)) return interaction.reply({ content: "❌ Seul le créateur du sondage ou un responsable staff peut le clôturer.", ephemeral: true });
+                await finishPoll(interaction.guild, pollId, interaction.message);
+                return interaction.reply({ content: "🔒 Sondage clôturé.", ephemeral: true });
+            }
+
+            if (interaction.customId.startsWith("hirosaki_poll_vote:")) {
+                const parts = interaction.customId.split(":");
+                const pollId = parts[1];
+                const optionIndex = Number(parts[2]);
+                const poll = ensurePolls(interaction.guild.id)[pollId];
+                if (!poll || poll.ended) return interaction.reply({ content: "❌ Ce sondage est terminé ou introuvable.", ephemeral: true });
+                if (poll.endAt && poll.endAt <= Date.now()) {
+                    await finishPoll(interaction.guild, pollId, interaction.message);
+                    return interaction.reply({ content: "❌ Ce sondage vient de se terminer.", ephemeral: true });
+                }
+                if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= poll.options.length) return interaction.reply({ content: "❌ Choix invalide.", ephemeral: true });
+                if (!poll.votes || typeof poll.votes !== "object") poll.votes = {};
+                const current = Array.isArray(poll.votes[interaction.user.id]) ? poll.votes[interaction.user.id] : [];
+                let selected;
+                if (poll.allowMultiple) {
+                    selected = current.includes(optionIndex) ? current.filter(index => index !== optionIndex) : current.concat(optionIndex);
+                    if (!selected.length) delete poll.votes[interaction.user.id];
+                    else poll.votes[interaction.user.id] = selected;
+                } else {
+                    selected = current.length === 1 && current[0] === optionIndex ? [] : [optionIndex];
+                    if (!selected.length) delete poll.votes[interaction.user.id];
+                    else poll.votes[interaction.user.id] = selected;
+                }
+                saveDatabase();
+                await interaction.message.edit({ embeds: [buildPollEmbed(interaction.guild, poll)], components: buildPollComponents(poll) }).catch(() => {});
+                return interaction.reply({ content: selected.length ? "✅ Vote enregistré pour : " + poll.options[optionIndex] : "↩️ Vote retiré.", ephemeral: true });
             }
 
             if (interaction.customId.startsWith("hirosaki_giveaway_join:")) {
