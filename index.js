@@ -6267,7 +6267,9 @@ registerCommand(
                     await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
                 return sendEmbed(message, successEmbed("🎙️ Je suis maintenant connecté à " + voiceChannel + "."));
             } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
                 console.error("Erreur de connexion vocale :", error);
+                console.error("Détail de la connexion vocale :", reason);
                 const connection = activeVoiceConnections.get(message.guild.id);
                 if (connection) connection.destroy();
                 activeVoiceConnections.delete(message.guild.id);
