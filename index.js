@@ -4989,7 +4989,8 @@ const ROLE_BOARD_DEFINITIONS = [
     { label: "🛡️ Responsable staff", roleName: PERMISSION_ROLES[4] },
     { label: "🔧 Staff", roleName: PERMISSION_ROLES[3] },
     { label: "🔨 Modérateur", roleName: PERMISSION_ROLES[2] },
-    { label: "🧪 Modérateur test", roleName: PERMISSION_ROLES[1] }
+    { label: "🧪 Modérateur test", roleName: PERMISSION_ROLES[1] },
+    { label: "🎫 Gestion ticket", roleName: TICKET_ROLE_NAME }
 ];
 
 function getRoleBoardConfig(guildId) {
