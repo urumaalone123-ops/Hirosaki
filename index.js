@@ -16,6 +16,13 @@ const {
     ActivityType
 } = require("discord.js");
 
+const {
+    joinVoiceChannel,
+    entersState,
+    VoiceConnectionStatus,
+    getVoiceConnection
+} = require("@discordjs/voice");
+
 require("dotenv").config();
 
 const fs = require("fs");
@@ -56,6 +63,8 @@ const client = new Client({
         Partials.User
     ]
 });
+
+const activeVoiceConnections = new Map();
 
 // ============================================================
 // DOSSIER / BASE DE DONNÉES
@@ -6189,196 +6198,55 @@ registerCommand(
     {
         permission: 0,
         crownOnly: true,
-
         aliases: [
             "join-voc",
             "joinvoc"
         ],
-
         execute: async message => {
-            const voiceChannel =
-                message.member?.voice?.channel;
+            const voiceChannel = message.member?.voice?.channel;
+            if (!voiceChannel) return sendEmbed(message, errorEmbed("❌ Tu dois être dans un salon vocal pour que je te rejoigne."));
 
-            if (!voiceChannel) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Tu dois être dans un salon vocal pour que je te rejoigne."
-                    )
-                );
+            const botMember = message.guild.members.me;
+            if (!botMember) return sendEmbed(message, errorEmbed("❌ Impossible de récupérer mon membre Discord."));
+
+            const permissions = voiceChannel.permissionsFor(botMember);
+            if (!permissions?.has(PermissionsBitField.Flags.Connect)) return sendEmbed(message, errorEmbed("❌ Je n'ai pas la permission de rejoindre ce salon vocal."));
+
+            try {
+                const currentConnection = activeVoiceConnections.get(message.guild.id) || getVoiceConnection(message.guild.id);
+                if (currentConnection && currentConnection.joinConfig.channelId !== voiceChannel.id) currentConnection.destroy();
+
+                const connection = joinVoiceChannel({
+                    channelId: voiceChannel.id,
+                    guildId: message.guild.id,
+                    adapterCreator: message.guild.voiceAdapterCreator,
+                    selfDeaf: true,
+                    selfMute: true
+                });
+                activeVoiceConnections.set(message.guild.id, connection);
+
+                connection.on(VoiceConnectionStatus.Disconnected, async () => {
+                    if (activeVoiceConnections.get(message.guild.id) !== connection) return;
+                    try {
+                        await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
+                    } catch {
+                        connection.destroy();
+                        if (activeVoiceConnections.get(message.guild.id) === connection) activeVoiceConnections.delete(message.guild.id);
+                    }
+                });
+
+                await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+                return sendEmbed(message, successEmbed("🎙️ Je suis maintenant connecté à " + voiceChannel + "."));
+            } catch (error) {
+                console.error("Erreur de connexion vocale :", error);
+                const connection = activeVoiceConnections.get(message.guild.id);
+                if (connection) connection.destroy();
+                activeVoiceConnections.delete(message.guild.id);
+                return sendEmbed(message, errorEmbed("❌ Impossible de me connecter à ce salon vocal. Vérifie que le bot possède les permissions **Voir le salon** et **Se connecter**."));
             }
-
-            const botMember =
-                message.guild.members.me;
-
-            if (!botMember) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Impossible de récupérer mon membre Discord."
-                    )
-                );
-            }
-
-            const permissions =
-                voiceChannel.permissionsFor(
-                    botMember
-                );
-
-            if (
-                !permissions?.has(
-                    PermissionsBitField.Flags.Connect
-                )
-            ) {
-                return sendEmbed(
-                    message,
-                    errorEmbed(
-                        "❌ Je n'ai pas la permission de rejoindre ce salon vocal."
-                    )
-                );
-            }
-
-            return sendEmbed(
-                message,
-                infoEmbed(
-                    `🎙️ La connexion vocale sera gérée par le système vocal du bot dans la partie finale.`
-                )
-            );
         }
     }
 );
-
-// ============================================================
-// GIVEAWAYS
-// ============================================================
-
-function ensureGiveaways(guildId) {
-    ensureGuild(guildId);
-
-    if (
-        !db.giveaways[guildId] ||
-        typeof db.giveaways[guildId] !== "object"
-    ) {
-        db.giveaways[guildId] = {};
-    }
-
-    return db.giveaways[guildId];
-}
-
-function generateGiveawayId() {
-    return (
-        `${Date.now()}-` +
-        Math.random()
-            .toString(36)
-            .slice(2, 8)
-    );
-}
-
-function getGiveawayEntries(
-    giveaway
-) {
-    return Array.isArray(
-        giveaway.entries
-    )
-        ? giveaway.entries
-        : [];
-}
-
-function pickGiveawayWinner(
-    giveaway
-) {
-    const entries =
-        getGiveawayEntries(
-            giveaway
-        );
-
-    if (
-        entries.length === 0
-    ) {
-        return null;
-    }
-
-    const index =
-        Math.floor(
-            Math.random() *
-                entries.length
-        );
-
-    return entries[index];
-}
-
-// ------------------------------------------------------------
-// +GIVEAWAY
-// ------------------------------------------------------------
-
-function parseGiveawayEndAt(value) {
-    const duration = parseDuration(value);
-    if (duration) return Date.now() + duration;
-    const timestamp = Date.parse(String(value || ""));
-    return Number.isFinite(timestamp) && timestamp > Date.now() ? timestamp : null;
-}
-
-function replaceGiveawayVariables(text, giveaway, guild, winnerText = "") {
-    return replaceTemplateVariables(text, { prize: giveaway.prize, winners: giveaway.winners, end: "<t:" + Math.floor(giveaway.endAt / 1000) + ":R>", winner: winnerText, server: guild.name, id: giveaway.id });
-}
-
-function buildGiveawayEmbed(guild, giveaway, ended = false, winnerText = "") {
-    const defaultDescription = ended
-        ? "Prix : " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + (winnerText || "Aucun gagnant")
-        : "## " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + giveaway.winners + "\n⏰ Fin : <t:" + Math.floor(giveaway.endAt / 1000) + ":R>\n\nClique sur 🎉 pour participer !";
-    return createEmbed({
-        title: replaceGiveawayVariables(ended ? (giveaway.endTitle || "🎉 Giveaway terminé") : (giveaway.title || "🎉 GIVEAWAY"), giveaway, guild, winnerText),
-        description: replaceGiveawayVariables(ended ? (giveaway.endDescription || defaultDescription) : (giveaway.description || defaultDescription), giveaway, guild, winnerText),
-        color: parseEmbedColor(giveaway.color, COLORS.warning),
-        thumbnail: resolveEmbedImage(giveaway.thumbnail || "server", guild, null, null),
-        image: resolveEmbedImage(giveaway.image, guild, null, null),
-        footer: replaceGiveawayVariables(giveaway.footer || ("ID : " + giveaway.id), giveaway, guild, winnerText),
-        timestamp: giveaway.timestamp !== false
-    });
-}
-
-function giveawayOptionError(options) {
-    const color = parseEmbedColor(options.color, COLORS.warning);
-    if (options.color && color === null) return "Couleur invalide.";
-    for (const key of ["image", "thumbnail"]) {
-        if (options[key] && !["none", "off", "server", "member", "user"].includes(options[key].toLowerCase()) && !isValidEmbedUrl(options[key])) return "URL d'image invalide pour l'option " + key + ".";
-    }
-    return null;
-}
-
-async function createGiveaway(guild, channel, { prize, winners, endAt, options = {} }) {
-    const giveawayId = generateGiveawayId();
-    const giveaway = {
-        id: giveawayId, guildId: guild.id, channelId: channel.id, messageId: null, prize, winners,
-        duration: endAt - Date.now(), endAt, title: options.title || "🎉 GIVEAWAY", endTitle: options["end-title"] || "🎉 Giveaway terminé",
-        description: options.description || null, endDescription: options["end-description"] || null, color: options.color || "#FEE75C",
-        footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
-        timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
-    };
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
-    );
-    const giveawayMessage = await channel.send({ embeds: [buildGiveawayEmbed(guild, giveaway)], components: [row] }).catch(() => null);
-    if (!giveawayMessage) return null;
-    giveaway.messageId = giveawayMessage.id;
-    ensureGiveaways(guild.id)[giveawayId] = giveaway;
-    saveDatabase();
-    return giveaway;
-}
-
-async function showGiveawayModal(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId("hirosaki_giveaway_config:" + interaction.user.id)
-        .setTitle("Créer un giveaway")
-        .addComponents(
-            createConfigInput("prize", "Prix à gagner", TextInputStyle.Short, "", true),
-            createConfigInput("winners", "Nombre de gagnants", TextInputStyle.Short, "1", true),
-            createConfigInput("duration", "Durée (ex: 3h, 2d)", TextInputStyle.Short, ""),
-            createConfigInput("endAt", "Fin exacte ISO avec fuseau", TextInputStyle.Short, ""),
-            createConfigInput("style", "Options séparées par ;", TextInputStyle.Paragraph, "title=🎁 Nitro Giveaway; color=#5865F2; footer=Bonne chance !")
-        );
-    await interaction.showModal(modal);
-}
 
 registerCommand(
     "giveaway",
