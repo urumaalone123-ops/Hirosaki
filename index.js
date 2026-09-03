@@ -6287,6 +6287,137 @@ registerCommand(
     }
 );
 
+// GIVEAWAYS
+// ============================================================
+
+function ensureGiveaways(guildId) {
+    ensureGuild(guildId);
+
+    if (
+        !db.giveaways[guildId] ||
+        typeof db.giveaways[guildId] !== "object"
+    ) {
+        db.giveaways[guildId] = {};
+    }
+
+    return db.giveaways[guildId];
+}
+
+function generateGiveawayId() {
+    return (
+        `${Date.now()}-` +
+        Math.random()
+            .toString(36)
+            .slice(2, 8)
+    );
+}
+
+function getGiveawayEntries(
+    giveaway
+) {
+    return Array.isArray(
+        giveaway.entries
+    )
+        ? giveaway.entries
+        : [];
+}
+
+function pickGiveawayWinner(
+    giveaway
+) {
+    const entries =
+        getGiveawayEntries(
+            giveaway
+        );
+
+    if (
+        entries.length === 0
+    ) {
+        return null;
+    }
+
+    const index =
+        Math.floor(
+            Math.random() *
+                entries.length
+        );
+
+    return entries[index];
+}
+
+// ------------------------------------------------------------
+// +GIVEAWAY
+// ------------------------------------------------------------
+
+function parseGiveawayEndAt(value) {
+    const duration = parseDuration(value);
+    if (duration) return Date.now() + duration;
+    const timestamp = Date.parse(String(value || ""));
+    return Number.isFinite(timestamp) && timestamp > Date.now() ? timestamp : null;
+}
+
+function replaceGiveawayVariables(text, giveaway, guild, winnerText = "") {
+    return replaceTemplateVariables(text, { prize: giveaway.prize, winners: giveaway.winners, end: "<t:" + Math.floor(giveaway.endAt / 1000) + ":R>", winner: winnerText, server: guild.name, id: giveaway.id });
+}
+
+function buildGiveawayEmbed(guild, giveaway, ended = false, winnerText = "") {
+    const defaultDescription = ended
+        ? "Prix : " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + (winnerText || "Aucun gagnant")
+        : "## " + giveaway.prize + "\n\n🏆 Gagnant(s) : " + giveaway.winners + "\n⏰ Fin : <t:" + Math.floor(giveaway.endAt / 1000) + ":R>\n\nClique sur 🎉 pour participer !";
+    return createEmbed({
+        title: replaceGiveawayVariables(ended ? (giveaway.endTitle || "🎉 Giveaway terminé") : (giveaway.title || "🎉 GIVEAWAY"), giveaway, guild, winnerText),
+        description: replaceGiveawayVariables(ended ? (giveaway.endDescription || defaultDescription) : (giveaway.description || defaultDescription), giveaway, guild, winnerText),
+        color: parseEmbedColor(giveaway.color, COLORS.warning),
+        thumbnail: resolveEmbedImage(giveaway.thumbnail || "server", guild, null, null),
+        image: resolveEmbedImage(giveaway.image, guild, null, null),
+        footer: replaceGiveawayVariables(giveaway.footer || ("ID : " + giveaway.id), giveaway, guild, winnerText),
+        timestamp: giveaway.timestamp !== false
+    });
+}
+
+function giveawayOptionError(options) {
+    const color = parseEmbedColor(options.color, COLORS.warning);
+    if (options.color && color === null) return "Couleur invalide.";
+    for (const key of ["image", "thumbnail"]) {
+        if (options[key] && !["none", "off", "server", "member", "user"].includes(options[key].toLowerCase()) && !isValidEmbedUrl(options[key])) return "URL d'image invalide pour l'option " + key + ".";
+    }
+    return null;
+}
+
+async function createGiveaway(guild, channel, { prize, winners, endAt, options = {} }) {
+    const giveawayId = generateGiveawayId();
+    const giveaway = {
+        id: giveawayId, guildId: guild.id, channelId: channel.id, messageId: null, prize, winners,
+        duration: endAt - Date.now(), endAt, title: options.title || "🎉 GIVEAWAY", endTitle: options["end-title"] || "🎉 Giveaway terminé",
+        description: options.description || null, endDescription: options["end-description"] || null, color: options.color || "#FEE75C",
+        footer: options.footer || ("ID : " + giveawayId), thumbnail: options.thumbnail || "server", image: options.image || null,
+        timestamp: options.timestamp?.toLowerCase() !== "off", entries: [], ended: false
+    };
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("hirosaki_giveaway_join:" + giveawayId).setLabel("Participer").setEmoji("🎉").setStyle(ButtonStyle.Primary)
+    );
+    const giveawayMessage = await channel.send({ embeds: [buildGiveawayEmbed(guild, giveaway)], components: [row] }).catch(() => null);
+    if (!giveawayMessage) return null;
+    giveaway.messageId = giveawayMessage.id;
+    ensureGiveaways(guild.id)[giveawayId] = giveaway;
+    saveDatabase();
+    return giveaway;
+}
+
+async function showGiveawayModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId("hirosaki_giveaway_config:" + interaction.user.id)
+        .setTitle("Créer un giveaway")
+        .addComponents(
+            createConfigInput("prize", "Prix à gagner", TextInputStyle.Short, "", true),
+            createConfigInput("winners", "Nombre de gagnants", TextInputStyle.Short, "1", true),
+            createConfigInput("duration", "Durée (ex: 3h, 2d)", TextInputStyle.Short, ""),
+            createConfigInput("endAt", "Fin exacte ISO avec fuseau", TextInputStyle.Short, ""),
+            createConfigInput("style", "Options séparées par ;", TextInputStyle.Paragraph, "title=🎁 Nitro Giveaway; color=#5865F2; footer=Bonne chance !")
+        );
+    await interaction.showModal(modal);
+}
+
 registerCommand(
     "giveaway",
     {
