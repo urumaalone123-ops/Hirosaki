@@ -6216,26 +6216,55 @@ registerCommand(
                 const currentConnection = activeVoiceConnections.get(message.guild.id) || getVoiceConnection(message.guild.id);
                 if (currentConnection && currentConnection.joinConfig.channelId !== voiceChannel.id) currentConnection.destroy();
 
-                const connection = joinVoiceChannel({
-                    channelId: voiceChannel.id,
-                    guildId: message.guild.id,
-                    adapterCreator: message.guild.voiceAdapterCreator,
-                    selfDeaf: true,
-                    selfMute: true
-                });
-                activeVoiceConnections.set(message.guild.id, connection);
+                const guildId = message.guild.id;
+                  const channelId = voiceChannel.id;
+                  const monitorVoiceConnection = (voiceConnection) => {
+                      voiceConnection.on(VoiceConnectionStatus.Disconnected, async () => {
+                          if (activeVoiceConnections.get(guildId) !== voiceConnection) return;
 
-                connection.on(VoiceConnectionStatus.Disconnected, async () => {
-                    if (activeVoiceConnections.get(message.guild.id) !== connection) return;
-                    try {
-                        await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-                    } catch {
-                        connection.destroy();
-                        if (activeVoiceConnections.get(message.guild.id) === connection) activeVoiceConnections.delete(message.guild.id);
-                    }
-                });
+                          try {
+                              await entersState(voiceConnection, VoiceConnectionStatus.Signalling, 5_000);
+                              return;
+                          } catch {
+                              if (activeVoiceConnections.get(guildId) !== voiceConnection) return;
+                              voiceConnection.destroy();
+                              activeVoiceConnections.delete(guildId);
+                          }
 
-                await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+                          setTimeout(() => {
+                              if (activeVoiceConnections.has(guildId)) return;
+                              const guild = client.guilds.cache.get(guildId);
+                              const channel = guild?.channels.cache.get(channelId);
+                              if (!guild || !channel) return;
+
+                              try {
+                                  const replacement = joinVoiceChannel({
+                                      channelId,
+                                      guildId,
+                                      adapterCreator: guild.voiceAdapterCreator,
+                                      selfDeaf: true,
+                                      selfMute: true
+                                  });
+                                  activeVoiceConnections.set(guildId, replacement);
+                                  monitorVoiceConnection(replacement);
+                              } catch (error) {
+                                  console.error("Erreur de reconnexion vocale :", error);
+                              }
+                          }, 1_500);
+                      });
+                  };
+
+                  const connection = joinVoiceChannel({
+                      channelId,
+                      guildId,
+                      adapterCreator: message.guild.voiceAdapterCreator,
+                      selfDeaf: true,
+                      selfMute: true
+                  });
+                  activeVoiceConnections.set(guildId, connection);
+                  monitorVoiceConnection(connection);
+
+                    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
                 return sendEmbed(message, successEmbed("🎙️ Je suis maintenant connecté à " + voiceChannel + "."));
             } catch (error) {
                 console.error("Erreur de connexion vocale :", error);
