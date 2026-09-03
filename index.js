@@ -596,22 +596,22 @@ const COMMAND_PERMISSIONS = {
     "clear-sanction": 2,
     banlist: 5,
 
-    autorole: 4,
+    autorole: 0,
 
-    welcome: 4,
-    "welcome-message": 4,
+    welcome: 0,
+    "welcome-message": 0,
 
     "ticket-add": 0,
     "ticket-close": 0,
     "ticket-claim": 0,
 
-    "ticket-config": 4,
+    "ticket-config": 0,
 
-    "stat-schedule": 4,
-    "leaderboard-schedule": 4,
+    "stat-schedule": 0,
+    "leaderboard-schedule": 0,
 
-    embed: 4,
-    dm: 4
+    embed: 0,
+    dm: 0
 };
 
 // ============================================================
@@ -4128,7 +4128,8 @@ async function sendScheduledLeaderboard(
 registerCommand(
     "stat-schedule",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "stat-auto"
@@ -4248,7 +4249,8 @@ registerCommand(
 registerCommand(
     "leaderboard-schedule",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "leaderboard-auto",
@@ -4654,7 +4656,8 @@ registerCommand(
 registerCommand(
     "autorole",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         execute: async (
             message,
@@ -4754,7 +4757,8 @@ registerCommand(
 registerCommand(
     "welcome",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
         aliases: ["bienvenue"],
         execute: async (message, args) => {
             const config = ensureGuild(message.guild.id);
@@ -4822,7 +4826,8 @@ registerCommand(
 registerCommand(
     "welcome-message",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "welcome-msg",
@@ -4874,7 +4879,8 @@ registerCommand(
 registerCommand(
     "dm",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
         aliases: ["sanction-dm", "dmsanction"],
         execute: async (message, args) => {
             const config = ensureGuild(message.guild.id);
@@ -4935,7 +4941,8 @@ registerCommand(
 registerCommand(
     "embed",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
         aliases: ["createembed", "create-embed"],
         execute: async (message, args) => {
             const parts = args.join(" ").split("|").map(part => part.trim());
@@ -5166,7 +5173,8 @@ function getTicketChannelName(config, username) {
 registerCommand(
     "ticket-config",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "ticketconfig"
@@ -5404,7 +5412,8 @@ async function createTicketPanel(guild) {
 registerCommand(
     "ticket",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "tickets"
@@ -6178,7 +6187,8 @@ registerCommand(
 registerCommand(
     "joinvoice",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
 
         aliases: [
             "join-voc",
@@ -6373,7 +6383,8 @@ async function showGiveawayModal(interaction) {
 registerCommand(
     "giveaway",
     {
-        permission: 4,
+        permission: 0,
+        crownOnly: true,
         aliases: ["giveaways"],
         execute: async (message, args) => {
             const action = (args.shift() || "").toLowerCase();
