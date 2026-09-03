@@ -3786,175 +3786,57 @@ registerCommand(
 );
 
 // ------------------------------------------------------------
-// MISE À JOUR DES DUOS D'UN SALON VOCAL
+// MISE À JOUR DES DUOS ET SESSIONS VOCALES
 // ------------------------------------------------------------
 
-function updateDuoSessions(
-    guild
-) {
-    const activePairs =
-        new Set();
+function syncVoiceSessions(guild) {
+    const activeUsers = new Set();
 
-    for (
-        const channel of guild.channels.cache.values()
-    ) {
-        if (
-            channel.type !==
-            ChannelType.GuildVoice
-        ) {
-            continue;
+    for (const channel of guild.channels.cache.values()) {
+        if (![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(channel.type)) continue;
+        for (const member of channel.members.values()) {
+            if (member.user.bot) continue;
+            activeUsers.add(member.id);
+            startVoiceSession(guild.id, member.id);
         }
+    }
 
-        const members =
-            [...channel.members.values()]
-                .filter(
-                    member =>
-                        !member.user.bot
-                );
+    for (const key of voiceSessions.keys()) {
+        if (!key.startsWith(guild.id + ":")) continue;
+        const userId = key.slice(guild.id.length + 1);
+        if (!activeUsers.has(userId)) finishVoiceSession(guild.id, userId);
+    }
+}
 
-        if (
-            members.length <
-            2
-        ) {
-            continue;
-        }
+function updateDuoSessions(guild) {
+    const activePairs = new Set();
 
-        for (
-            let i = 0;
-            i < members.length;
-            i++
-        ) {
-            for (
-                let j = i + 1;
-                j < members.length;
-                j++
-            ) {
-                const userA =
-                    members[i].id;
+    for (const channel of guild.channels.cache.values()) {
+        if (![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(channel.type)) continue;
+        const members = [...channel.members.values()].filter(member => !member.user.bot);
+        if (members.length < 2) continue;
 
-                const userB =
-                    members[j].id;
-
-                const pairKey =
-                    `${guild.id}:${createDuoKey(
-                        userA,
-                        userB
-                    )}`;
-
-                activePairs.add(
-                    pairKey
-                );
-
-                startDuoSession(
-                    guild.id,
-                    userA,
-                    userB
-                );
+        for (let i = 0; i < members.length; i++) {
+            for (let j = i + 1; j < members.length; j++) {
+                const userA = members[i].id;
+                const userB = members[j].id;
+                const pairKey = guild.id + ":" + createDuoKey(userA, userB);
+                activePairs.add(pairKey);
+                startDuoSession(guild.id, userA, userB);
             }
         }
     }
 
-    // Ferme les sessions de duo
-    // qui ne sont plus actives.
-    for (
-        const [
-            key
-        ] of duoVoiceSessions
-    ) {
-        if (
-            !key.startsWith(
-                `${guild.id}:`
-            )
-        ) {
+    for (const [key] of duoVoiceSessions) {
+        if (!key.startsWith(guild.id + ":") || activePairs.has(key)) continue;
+        const parts = key.split(":");
+        if (parts.length !== 3) {
+            duoVoiceSessions.delete(key);
             continue;
         }
-
-        if (
-            activePairs.has(key)
-        ) {
-            continue;
-        }
-
-        const parts =
-            key.split(":");
-
-        if (
-            parts.length !==
-            3
-        ) {
-            duoVoiceSessions.delete(
-                key
-            );
-
-            continue;
-        }
-
-        finishDuoSession(
-            guild.id,
-            parts[1],
-            parts[2]
-        );
+        finishDuoSession(guild.id, parts[1], parts[2]);
     }
 }
-
-// ------------------------------------------------------------
-// MISE À JOUR DES SESSIONS VOCALES
-// ------------------------------------------------------------
-
-client.on(
-    "voiceStateUpdate",
-    async (
-        oldState,
-        newState
-    ) => {
-        if (
-            !newState.guild
-        ) {
-            return;
-        }
-
-        const guild =
-            newState.guild;
-
-        if (
-            newState.member?.user.bot ||
-            oldState.member?.user.bot
-        ) {
-            return;
-        }
-
-        const userId =
-            newState.id;
-
-        // Entrée dans un vocal
-        if (
-            !oldState.channelId &&
-            newState.channelId
-        ) {
-            startVoiceSession(
-                guild.id,
-                userId
-            );
-        }
-
-        // Sortie complète du vocal
-        if (
-            oldState.channelId &&
-            !newState.channelId
-        ) {
-            finishVoiceSession(
-                guild.id,
-                userId
-            );
-        }
-
-        // Si le membre change de vocal,
-        // sa durée continue normalement.
-        updateDuoSessions(
-            guild
-        );
-    }
-);
 
 // ------------------------------------------------------------
 // SYNCHRONISATION VOCALE PÉRIODIQUE
@@ -3962,18 +3844,29 @@ client.on(
 
 setInterval(
     () => {
-        for (
-            const guild of client.guilds.cache.values()
-        ) {
-            updateDuoSessions(
-                guild
-            );
+        for (const guild of client.guilds.cache.values()) {
+            syncVoiceSessions(guild);
+            updateDuoSessions(guild);
         }
     },
     10_000
 );
 
 // ------------------------------------------------------------
+// ÉVÉNEMENT VOCAL
+// ------------------------------------------------------------
+
+client.on(
+    "voiceStateUpdate",
+    async (oldState, newState) => {
+        if (!newState.guild) return;
+        const guild = newState.guild;
+        if (newState.member?.user.bot || oldState.member?.user.bot) return;
+        syncVoiceSessions(guild);
+        updateDuoSessions(guild);
+    }
+);
+
 // COMPTEUR DES MESSAGES
 // ------------------------------------------------------------
 //
