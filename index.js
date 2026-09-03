@@ -6274,8 +6274,14 @@ registerCommand(
                 if (connection) connection.destroy();
                 activeVoiceConnections.delete(message.guild.id);
                 const detail = reason.length > 160 ? reason.slice(0, 157) + "…" : reason;
-                 return sendEmbed(message, errorEmbed("❌ Impossible de me connecter à ce salon vocal. Vérifie que le bot possède les permissions **Voir le salon** et **Se connecter**.
-Détail : `" + detail + "`"));
+                return sendEmbed(
+                    message,
+                    errorEmbed(
+                        "❌ Impossible de me connecter à ce salon vocal. Vérifie que le bot possède les permissions **Voir le salon** et **Se connecter**. " +
+                        "Détail : " +
+                        detail,
+                    ),
+                );
             }
         }
     }
