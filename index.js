@@ -250,6 +250,12 @@ function createGuildConfig() {
             roleId: null
         },
 
+        autoReact: {
+            enabled: false,
+            channelId: null,
+            emojis: []
+        },
+
         ticket: {
             enabled: false,
             categoryId: null,
@@ -345,6 +351,34 @@ function ensureGuild(guildId) {
     }
 
     return config;
+}
+
+
+function getAutoReactConfig(guildId) {
+    const config = ensureGuild(guildId);
+    if (!config.autoReact || typeof config.autoReact !== "object") config.autoReact = { enabled: false, channelId: null, emojis: [] };
+    if (!Array.isArray(config.autoReact.emojis)) config.autoReact.emojis = [];
+    return config.autoReact;
+}
+
+function parseAutoReactChannelId(value) {
+    const mention = String(value || "").match(/^<#(\d+)>$/);
+    if (mention) return mention[1];
+    return /^\d{17,20}$/.test(String(value || "")) ? String(value) : null;
+}
+
+function isUsableAutoReactEmoji(value) {
+    const emoji = String(value || "").trim();
+    if (/^<a?:[A-Za-z0-9_~]+:\d{17,20}>$/.test(emoji)) return true;
+    return [...emoji].some(character => character.codePointAt(0) > 127);
+}
+
+async function applyAutoReactions(message) {
+    const config = getAutoReactConfig(message.guild.id);
+    if (!config.enabled || !config.channelId || message.channel.id !== config.channelId || !config.emojis.length) return;
+    for (const emoji of config.emojis) {
+        await message.react(emoji).catch(error => console.error("Erreur auto-react :", error?.message || error));
+    }
 }
 
 // ============================================================
@@ -6323,26 +6357,22 @@ function getGiveawayEntries(
 }
 
 function pickGiveawayWinner(
-    giveaway
+    giveaway,
+    excludedIds = []
 ) {
-    const entries =
-        getGiveawayEntries(
-            giveaway
-        );
+    const entries = getGiveawayEntries(giveaway);
+    const excluded = new Set(excludedIds);
+    const available = entries.filter(entry => !excluded.has(entry));
+    if (available.length === 0) return null;
+    return available[Math.floor(Math.random() * available.length)];
+}
 
-    if (
-        entries.length === 0
-    ) {
-        return null;
-    }
 
-    const index =
-        Math.floor(
-            Math.random() *
-                entries.length
-        );
-
-    return entries[index];
+function findGiveawayForReroll(giveaways, channelId, giveawayId = "") {
+    if (giveawayId) return giveaways[giveawayId] || null;
+    return Object.values(giveaways)
+        .filter(giveaway => giveaway.channelId === channelId && giveaway.ended)
+        .sort((a, b) => (b.endAt || 0) - (a.endAt || 0))[0] || null;
 }
 
 // ------------------------------------------------------------
@@ -6476,12 +6506,20 @@ registerCommand(
             }
 
             if (action === "reroll" || action === "rerooll") {
-                const giveawayId = args.shift();
-                const giveaway = giveaways[giveawayId];
-                if (!giveaway) return sendEmbed(message, errorEmbed("❌ Giveaway introuvable."));
-                const winner = pickGiveawayWinner(giveaway);
-                if (!winner) return sendEmbed(message, errorEmbed("❌ Aucun participant disponible pour effectuer un reroll."));
-                return sendEmbed(message, successEmbed("🎉 Nouveau gagnant : <@" + winner + "> !\n\nPrix : " + giveaway.prize));
+                const requestedGiveawayId = args.shift();
+                const giveaway = findGiveawayForReroll(giveaways, message.channel.id, requestedGiveawayId);
+                if (!giveaway) return sendEmbed(message, errorEmbed(requestedGiveawayId ? "❌ Giveaway introuvable." : "❌ Aucun giveaway terminé trouvé dans ce salon."));
+                if (!giveaway.ended) return sendEmbed(message, errorEmbed("❌ Le giveaway doit être terminé avant un reroll."));
+                const previousWinners = [
+                    ...(Array.isArray(giveaway.winnerIds) ? giveaway.winnerIds : []),
+                    ...(Array.isArray(giveaway.rerollWinnerIds) ? giveaway.rerollWinnerIds : [])
+                ];
+                const winner = pickGiveawayWinner(giveaway, previousWinners);
+                if (!winner) return sendEmbed(message, errorEmbed("❌ Aucun autre participant disponible pour effectuer un reroll."));
+                if (!Array.isArray(giveaway.rerollWinnerIds)) giveaway.rerollWinnerIds = [];
+                giveaway.rerollWinnerIds.push(winner);
+                saveDatabase();
+                return sendEmbed(message, successEmbed("🎉 Nouveau gagnant : <@" + winner + "> !\n\nPrix : " + giveaway.prize + "\nID : " + giveaway.id));
             }
 
             if (action === "end") {
@@ -6498,7 +6536,7 @@ registerCommand(
                 PREFIX + "giveaway form\n" +
                 PREFIX + "giveaway start 3h 1 Nitro\n" +
                 PREFIX + "giveaway end ID\n" +
-                PREFIX + "giveaway reroll ID"
+                PREFIX + "giveaway reroll [ID facultatif]"
             ));
         }
     }
@@ -6522,6 +6560,8 @@ async function finishGiveaway(guild, giveawayId) {
         winners.push(available[index]);
         available.splice(index, 1);
     }
+
+    giveaway.winnerIds = winners;
 
     const channel = guild.channels.cache.get(giveaway.channelId);
     if (channel?.isTextBased()) {
@@ -7469,8 +7509,7 @@ function getHelpPages() {
                 `\`${PREFIX}embed\`\n` +
                 `\`${PREFIX}dm\`\n` +
                 `\`${PREFIX}welcome\`\n` +
-                `\`${PREFIX}ticket\`\n` +
-                `\`${PREFIX}giveaway\`\n\n` +
+                `\`${PREFIX}autoreact\`\n\n` +
                 "Toutes les permissions des Perm 1, 2 et 3 sont également disponibles."
         },
 
@@ -7536,6 +7575,41 @@ function buildHelpEmbed(
 // ------------------------------------------------------------
 // +HELP
 // ------------------------------------------------------------
+
+
+registerCommand(
+    "autoreact",
+    {
+        permission: 4,
+        aliases: ["auto-react"],
+        execute: async (message, args) => {
+            const action = (args.shift() || "").toLowerCase();
+            const config = getAutoReactConfig(message.guild.id);
+            if (action === "off" || action === "disable") {
+                config.enabled = false;
+                saveDatabase();
+                return sendEmbed(message, infoEmbed("⏸️ Auto-réaction désactivée."));
+            }
+            if (action === "show" || action === "status") {
+                if (!config.channelId || !config.emojis.length) return sendEmbed(message, infoEmbed("ℹ️ Aucune auto-réaction n'est configurée."));
+                return sendEmbed(message, infoEmbed("Auto-réaction : **" + (config.enabled ? "activée" : "désactivée") + "**\nSalon : <#" + config.channelId + ">\nÉmojis : " + config.emojis.join(" ")));
+            }
+            if (["set", "config", "configure"].includes(action)) {
+                const channelId = parseAutoReactChannelId(args.shift());
+                const emojis = args.map(value => String(value).trim()).filter(isUsableAutoReactEmoji);
+                const channel = channelId ? message.guild.channels.cache.get(channelId) : null;
+                if (!channel || !channel.isTextBased()) return sendEmbed(message, errorEmbed("❌ Salon invalide. Utilise autoreact set #smash-or-pass emoji1 emoji2."));
+                if (emojis.length < 1 || emojis.length > 5 || emojis.length !== args.length) return sendEmbed(message, errorEmbed("❌ Renseigne entre 1 et 5 émojis valides."));
+                config.channelId = channel.id;
+                config.emojis = emojis;
+                config.enabled = true;
+                saveDatabase();
+                return sendEmbed(message, successEmbed("✅ Auto-réaction activée dans <#" + channel.id + "> avec : " + emojis.join(" ")));
+            }
+            return sendEmbed(message, infoEmbed("Utilisation :\n" + PREFIX + "autoreact set #salon emoji1 emoji2\n" + PREFIX + "autoreact show\n" + PREFIX + "autoreact off"));
+        }
+    }
+);
 
 registerCommand(
     "help",
@@ -7946,6 +8020,10 @@ client.on(
             recordMessage(
                 message
             );
+
+            if (!message.content.startsWith(PREFIX)) {
+                await applyAutoReactions(message);
+            }
 
             const parsed =
                 getCommandFromMessage(
